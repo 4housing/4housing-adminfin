@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Administración y Finanzas · 4housing</title>
+<meta name="theme-color" content="#5f7a4e">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#f5f4f1; --paper:#ffffff; --ink:#20262e; --ink-soft:#5b646e; --ink-faint:#8b939c;
+    --line:#dfe2e6; --accent:#235a8f; --accent-soft:#e6eef6; --accent-ink:#12395e;
+    --ok:#1a7a45; --warn:#9a5a12; --warn-soft:#f7efe0;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14181d; --paper:#1b2128; --ink:#e8ebee; --ink-soft:#a4adb6; --ink-faint:#6e7883;
+      --line:#2c343d; --accent:#7bafe0; --accent-soft:#1e3349; --accent-ink:#bcdcff;
+      --ok:#5fc98d; --warn:#e0a352; --warn-soft:#3a2d15;
+    }
+  }
+  *{box-sizing:border-box;margin:0;}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.55;min-height:100vh;}
+  .wrap{max-width:880px;margin:0 auto;padding:2rem 1.25rem 4rem;}
+  header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding-bottom:1.25rem;border-bottom:1px solid var(--line);margin-bottom:2rem;}
+  header[hidden]{display:none;}
+  .brand{display:flex;align-items:baseline;gap:.6rem;}
+  .brand h1{font-size:1.15rem;font-weight:700;letter-spacing:-.01em;}
+  .brand .tag{font-family:var(--mono);font-size:.7rem;color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:.05rem .4rem;letter-spacing:.06em;}
+  .who{display:flex;align-items:center;gap:.8rem;font-size:.85rem;color:var(--ink-soft);}
+  .who b{color:var(--ink);font-weight:600;}
+  button{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line);background:var(--paper);color:var(--ink);padding:.5rem 1rem;}
+  button:hover{border-color:var(--accent);}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;padding:.65rem 1.3rem;display:inline-flex;align-items:center;gap:.6rem;}
+  .btn-primary:hover{filter:brightness(1.08);}
+  .btn-ghost{border:none;background:none;color:var(--ink-soft);padding:.3rem .5rem;font-size:.83rem;text-decoration:none;}
+  .btn-ghost:hover{color:var(--ink);}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:2.2rem;max-width:460px;margin:8vh auto 0;text-align:center;}
+  .card h2{font-size:1.25rem;margin-bottom:.5rem;}
+  .card p{color:var(--ink-soft);font-size:.92rem;margin-bottom:1.4rem;}
+  .card .fine{font-size:.78rem;color:var(--ink-faint);margin:1.2rem 0 0;}
+  .notice{background:var(--warn-soft);border:1px solid var(--warn);border-radius:8px;padding:1rem 1.2rem;font-size:.9rem;max-width:560px;margin:6vh auto 0;}
+  .notice code{font-family:var(--mono);font-size:.83em;}
+  .msg{color:var(--ink-soft);font-size:.9rem;padding:2rem 0;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header id="hdr" hidden>
+    <div class="brand"><h1>Administración y Finanzas</h1><span class="tag">4HOUSING</span></div>
+    <div class="who"><span id="who-nombre"></span><a class="btn-ghost" href="/portal/">Portal</a><button class="btn-ghost" id="btn-salir">Salir</button></div>
+  </header>
+  <main id="main"><p class="msg">Cargando…</p></main>
+</div>
+
+<script src="/portal/nav.js" defer></script>
+<script>
+/* ==========================================================================
+   Administración y Finanzas — esqueleto vacío, mismo shell de acceso que el portal.
+   Proyecto Supabase compartido (config idéntica al portal y demás apps).
+   ========================================================================== */
+const CONFIG = {
+  SUPABASE_URL: 'https://wcpkpwxhqdcdljfwzcmy.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_08decRYdCRUdtO5zogvJVg_VEBCN9pf',
+};
+const SECTOR = 'adminfin';
+
+const $main = document.getElementById('main');
+const $hdr  = document.getElementById('hdr');
+let sb = null;
+
+function esc(s){ const d=document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+function vistaLogin(){
+  $hdr.hidden = true;
+  $main.innerHTML = `
+    <div class="card">
+      <h2>Administración y Finanzas</h2>
+      <p>Acceso interno. Ingresá con tu cuenta Microsoft de la organización.</p>
+      <button class="btn-primary" id="btn-ms">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="0" y="0" width="7.4" height="7.4" fill="#f25022"/><rect x="8.6" y="0" width="7.4" height="7.4" fill="#7fba00"/><rect x="0" y="8.6" width="7.4" height="7.4" fill="#00a4ef"/><rect x="8.6" y="8.6" width="7.4" height="7.4" fill="#ffb900"/></svg>
+        Ingresar con Microsoft
+      </button>
+      <p class="fine">Solo cuentas del tenant de 4housing.</p>
+    </div>`;
+  document.getElementById('btn-ms').addEventListener('click', async () => {
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'azure',
+      options: { scopes: 'openid profile email', redirectTo: window.location.origin + window.location.pathname }
+    });
+    if (error) alert('No se pudo iniciar el login: ' + error.message);
+  });
+}
+
+function vistaPendiente(perfil){
+  $hdr.hidden = true;
+  $main.innerHTML = `
+    <div class="card">
+      <h2>Cuenta pendiente de habilitación</h2>
+      <p>Hola${perfil?.nombre ? ' <b>' + esc(perfil.nombre) + '</b>' : ''}. Tu cuenta quedó registrada
+      pero todavía no tiene sectores asignados. Pedile a dirección que la habilite.</p>
+      <button id="btn-salir-2">Salir</button>
+    </div>`;
+  document.getElementById('btn-salir-2').addEventListener('click', salir);
+}
+
+function vistaSinSector(perfil){
+  $hdr.hidden = false;
+  document.getElementById('who-nombre').innerHTML = '<b>' + esc(perfil.nombre || perfil.email) + '</b>';
+  $main.innerHTML = `
+    <div class="card">
+      <h2>Sin acceso a este sector</h2>
+      <p>Tu cuenta está activa pero no tiene el sector <b>Administración y Finanzas</b> asignado. Pedile a dirección que te lo habilite desde el portal.</p>
+      <a class="btn-ghost" href="/portal/">Volver al portal</a>
+    </div>`;
+}
+
+function vistaApp(perfil, cargo){
+  $hdr.hidden = false;
+  document.getElementById('who-nombre').innerHTML =
+    '<b>' + esc(perfil.nombre || perfil.email) + '</b>' + (cargo ? ' · ' + esc(cargo) : '');
+  $main.innerHTML = `
+    <div class="card">
+      <h2>Administración y Finanzas</h2>
+      <p>Esta app todavía no tiene funcionalidad — es el esqueleto de acceso, comparte login y permisos con el resto del portal.</p>
+      <p class="fine">Sector: <code>adminfin</code></p>
+    </div>`;
+}
+
+async function salir(){
+  await sb.auth.signOut();
+  window.location.reload();
+}
+document.getElementById('btn-salir').addEventListener('click', salir);
+
+async function iniciar(){
+  sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { vistaLogin(); return; }
+
+  const uid = session.user.id;
+  const [{ data: perfil, error: e1 }, { data: sectores, error: e2 }] = await Promise.all([
+    sb.from('perfiles').select('*').eq('id', uid).maybeSingle(),
+    sb.from('perfiles_sector').select('sector, cargo, permisos').eq('perfil_id', uid),
+  ]);
+
+  if (e1 || e2) {
+    $main.innerHTML = `<p class="msg">Error cargando tu perfil: ${esc((e1 || e2).message)}</p>`;
+    return;
+  }
+  if (!perfil || !perfil.activo) { vistaPendiente(perfil); return; }
+
+  const propio = (sectores || []).find(s => s.sector === SECTOR);
+  if (!perfil.es_direccion && !propio) { vistaSinSector(perfil); return; }
+
+  vistaApp(perfil, perfil.es_direccion ? 'dirección' : (propio && propio.cargo));
+}
+
+iniciar();
+</script>
+</body>
+</html>
