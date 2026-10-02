@@ -1992,10 +1992,13 @@ function cuyRenderCot(){
   const usos = {}; CUY.lista.forEach(r => { if (r.fecha) usos[r.fecha] = (usos[r.fecha] || 0) + 1; }); CUY.movs.forEach(m => { if (m.tipo !== 'saldo_inicial') usos[m.fecha] = (usos[m.fecha] || 0) + 1; });
   const fechas = [...new Set(Object.keys(usos).concat(CUY.cots.map(c => c.fecha)))].sort().reverse();
   const filas = fechas.map(f => ({ fecha: f, c: CUY.cots.find(x => x.fecha === f) || {}, usos: usos[f] || 0 }));
+  // Más de 5 días entre la fecha y la cotización que se usa = falta cargar la serie de ese período (no un fin de semana o feriado)
+  const vieja = (x, k) => k && (new Date(x.fecha) - new Date(k.fecha)) / 864e5 > 5;
   const est = x => { const a = cuyCotDe(x.fecha, 'ars_usd'), u = cuyCotDe(x.fecha, 'uyu_usd');
-    return (!a && !u) ? 'Falta' : !a ? 'Falta ARS/USD' : !u ? 'Falta UYU/USD' : 'Con cotización'; };
+    return (!a && !u) ? 'Falta' : !a ? 'Falta ARS/USD' : !u ? 'Falta UYU/USD' : (vieja(x, a) || vieja(x, u)) ? 'Desactualizada' : 'Con cotización'; };
   const usa = x => { const a = cuyCotDe(x.fecha, 'ars_usd'), u = cuyCotDe(x.fecha, 'uyu_usd');
-    return (a || u) ? '<div class="muted">usa ' + (a ? 'ARS ' + fmtFecha(a.fecha) : '') + (a && u ? ' · ' : '') + (u ? 'UYU ' + fmtFecha(u.fecha) : '') + '</div>' : ''; };
+    const f = (t, k) => '<span' + (vieja(x, k) ? ' class="warn"' : '') + '>' + t + ' ' + fmtFecha(k.fecha) + '</span>';
+    return (a || u) ? '<div class="muted">usa ' + (a ? f('ARS', a) : '') + (a && u ? ' · ' : '') + (u ? f('UYU', u) : '') + '</div>' : ''; };
   const inp = (x, campo) => SP.editar ? '<input class="tc-in" type="number" step="0.0001" min="0" data-cot="' + esc(x.fecha) + '|' + campo + '" value="' + esc(x.c[campo] == null ? '' : x.c[campo]) + '" placeholder="' + (cuyCotDe(x.fecha, campo) ? fmtTC(cuyCotDe(x.fecha, campo).v) : '—') + '">' : (x.c[campo] == null ? '—' : fmtTC(x.c[campo]));
   const cols = [
     { id:'fecha', t:'Fecha', fecha:x => x.fecha, td:x => '<b>' + fmtFecha(x.fecha) + '</b>' },
@@ -2012,7 +2015,7 @@ function cuyRenderCot(){
     + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango: USD → DOL con la cotización <b>ARS/USD (BNA divisa)</b>; UYU → PES, pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
     + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.gub.uy/direccion-general-impositiva/datos-y-estadisticas/datos/cotizaciones-interbancarias" target="_blank" rel="noopener">cotizaciones interbancarias de la DGI</a> y subilo con "Importar cotizaciones". '
     + 'ARS/USD (BNA divisa): a mano desde <a class="lnk" href="https://www.bna.com.ar/Personas" target="_blank" rel="noopener">bna.com.ar</a>, o importando un Excel con fecha y valor. '
-    + (faltan ? '<b class="warn">' + faltan + ' fecha(s) con facturas o movimientos sin cotización.</b>' : '') + '</div>'
+    + (faltan ? '<b class="warn">' + faltan + ' fecha(s) con facturas o movimientos sin cotización o con una cotización de más de 5 días antes (falta cargar ese período).</b>' : '') + '</div>'
     + '<div class="card">' + cardH('Cotizaciones por día', 'Una fila por fecha con facturas o movimientos. Se guarda al salir de la casilla (o con Enter). En gris dentro de la casilla: la cotización que se está usando.')
     + '<div class="tools" style="padding-bottom:0">'
     +   (SP.editar ? '<input type="date" id="ct-nf" class="tc-in" style="width:140px;text-align:left"><button class="btn ghost sm" id="ct-add">Agregar fecha</button>' : '')
