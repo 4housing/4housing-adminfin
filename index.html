@@ -83,6 +83,16 @@
   .b-pend{background:var(--warn-soft);color:var(--warn);}
   .b-gest{background:var(--accent-soft);color:var(--accent-ink);}
   .b-pag{background:color-mix(in srgb, var(--ok) 15%, transparent);color:var(--ok);}
+  .b-gris{background:var(--line);color:var(--ink-soft);}
+  /* Solapas de la app (sección) y pestañas internas */
+  .secciones{display:flex;gap:.3rem;border-bottom:1px solid var(--line);margin:-1rem 0 1rem;}
+  .sec{font-size:.88rem;font-weight:600;padding:.5rem .9rem;border-bottom:2px solid transparent;color:var(--ink-soft);}
+  .sec.on{color:var(--accent);border-bottom-color:var(--accent);}
+  .stabs{display:flex;gap:.3rem;margin-bottom:.8rem;flex-wrap:wrap;}
+  .stab{font-size:.85rem;font-weight:600;border:none;background:none;color:var(--ink-soft);padding:.45rem .8rem;border-bottom:2px solid transparent;border-radius:0;}
+  .stab.on{color:var(--accent);border-bottom-color:var(--accent);}
+  .stab:hover{color:var(--ink);}
+  table.tbl tfoot td{padding:.55rem .6rem;border-top:1px solid var(--line);}
   .btn-sm{font-size:.8rem;padding:.3rem .7rem;}
   a.lnk{color:var(--accent);text-decoration:none;}
   a.lnk:hover{text-decoration:underline;}
@@ -188,157 +198,166 @@ function vistaApp(perfil, cargo){
 }
 
 /* ==========================================================================
-   Solicitudes de pago — espejo de la app de Compras (4housing-compras).
-   Lee la MISMA tabla (compras_solicitudes_pago): no hay copia ni sincronización.
-   Administración solo confirma lectura, informa fecha estimada de pago y comenta,
-   siempre a través de la función compras_solpago_adminfin() (no escribe la tabla directo).
-   Importa "Pagos a realizar" de Tango con compras_pagos_realizar_importar(): reemplaza la
-   foto y pasa a Pagada toda FAC que figuraba en el informe anterior y ya no está.
+   Solicitudes de pago — misma solapa que en la app de Compras (4housing-compras),
+   sobre las MISMAS tablas del proyecto wcpk (no hay copia ni sincronización):
+     · Pendientes de facturar · Pagos solicitados · Pagos a realizar
+   Reparto: Compras pide el pago (adjunta la FAC / tilda la factura); Administración sube los 3 informes
+   de Tango (Informe OC, Pendientes de facturar, Pagos a realizar) y responde la gestión de cada pedido
+   (confirmar lectura, fecha estimada de pago, mensajes). Escritura solo por funciones:
+   compras_informe_cargar / compras_pagos_realizar_importar / compras_solpago_adminfin.
    ========================================================================== */
-const SP = { editar:false, lista:[], filtro:'Pendiente', q:'', ultimaImport:null, actual:null, colf:{} };
-// Columnas de la tabla: id, título y valor para el filtro tipo Excel (null = sin filtro).
-const SP_COLS = [
-  { id:'fac',    t:'Factura',           v:s => s.nro_factura || '(sin N°)' },
-  { id:'prov',   t:'Proveedor',         v:s => s.proveedor_cod || '(sin proveedor)' },
-  { id:'oc',     t:'OC',                v:s => nroOC(s.oc_numero) || '(sin OC)' },
-  { id:'aux',    t:'Auxiliar',          v:s => s.proyecto_cod || '(sin auxiliar)' },
-  { id:'comp',   t:'Comprador',         v:s => s.comprador || '(sin comprador)' },
-  { id:'mon',    t:'Monto',             v:s => s.moneda === 'USD' ? 'Dólares' : 'Pesos' },
-  { id:'estado', t:'Estado',            v:s => (s.estado || 'Pendiente') + (s.leido_en ? ' · leída' : '') },
-  { id:'pago',   t:'Pago',              v:s => s.estado === 'Pagada' ? 'Pagada' : (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : 'Sin fecha') },
-  { id:'ult',    t:'Último comentario', v:null },
-  { id:'acc',    t:'',                  v:null },
-];
-const SP_COLW_KEY = 'adminfin:colw:solpago';
-const SP_ESTADOS = ['Pendiente','En gestión','Pagada'];
-const SP_BADGE = { 'Pendiente':'b-pend', 'En gestión':'b-gest', 'Pagada':'b-pag' };
+const SP = { editar:false, tab:'solicitudes', filtro:'Pendiente', lista:[], pend:[], pagos:[], oci:[], prov:{}, meta:[],
+             q:{}, colf:{}, fecha:{}, actual:null, grupos:[] };
+const FAC_CARGADA = 'FAC cargada';
+const SP_BADGE = { 'FAC cargada':'b-gris', 'Pendiente':'b-pend', 'En gestión':'b-gest', 'Pagada':'b-pag' };
+const INFORMES = [['oc_informe','Informe OC'], ['pend_facturar','Pendientes de facturar'], ['pagos_realizar','Pagos a realizar']];
 
 function fmtFecha(v){ if(!v) return '—'; const p=String(v).slice(0,10).split('-'); return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : String(v); }
-function fmtMonto(v, mon){ if(v==null || v==='') return '—'; return (mon==='USD'?'US$ ':'$ ') + (+v||0).toLocaleString('es-AR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtNum(v){ return (+v||0).toLocaleString('es-AR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtMonto(v, mon){ if(v==null || v==='') return '—'; return (mon==='USD'?'US$ ':'$ ') + fmtNum(v); }
 // N° de OC de Tango sin punto de venta ni ceros adelante (" 0000100031125" -> "31125"), igual que en Compras.
 function nroOC(v){ const t=String(v==null?'':v).trim(); const m=t.match(/^(\d{5})-?(\d{8})$/); return m ? (m[2].replace(/^0+/,'')||'0') : t; }
 function fold(s){ return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+function key(prov, nro){ return String(prov==null?'':prov).trim().toUpperCase() + '|' + String(nro==null?'':nro).trim().toUpperCase(); }
+// Misma clave que public.compras_clave_fac(): proveedor + N° sin espacios/guiones, en mayúsculas.
+function claveFac(prov, nro){ return String(prov==null?'':prov).replace(/\s/g,'').toUpperCase() + '|' + String(nro==null?'':nro).replace(/[^A-Za-z0-9]/g,'').toUpperCase(); }
+function provNombre(cod){ return SP.prov[String(cod||'').trim().toUpperCase()] || ''; }
 let _toastT=null;
-function toast(t){ const el=document.getElementById('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('show'), 3200); }
+function toast(t){ const el=document.getElementById('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('show'), 3500); }
 function abrirModal(html){ document.getElementById('modal').innerHTML=html; document.getElementById('modalBg').classList.add('open'); }
 function cerrarModal(){ document.getElementById('modalBg').classList.remove('open'); SP.actual=null; }
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') cerrarModal(); });
 
+// supabase-js trae de a 1000 filas: paginar (el Informe OC tiene miles)
+async function selTodo(tabla, cols, orden){
+  let out=[];
+  for (let i=0; i<100; i++) {
+    let q = sb.from(tabla).select(cols).range(i*1000, i*1000+999);
+    if (orden) q = q.order(orden, { ascending:true });
+    const { data, error } = await q;
+    if (error) throw error;
+    out = out.concat(data||[]);
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
 async function spCargar(){
-  const [{ data, error }, { data: ult }] = await Promise.all([
-    sb.from('compras_solicitudes_pago').select('*').neq('estado','FAC cargada').order('id', { ascending:false }),
-    sb.from('compras_pagos_realizar').select('importado_en, importado_por').order('importado_en', { ascending:false }).limit(1),
-  ]);
-  if (error) {
-    $main.innerHTML = '<div class="notice">No pude leer las solicitudes de pago: ' + esc(error.message)
-      + '<br><span class="muted">Si dice "permission denied", falta correr el SQL de habilitación (sql/2026-10_solpago_informes.sql del repo 4housing-compras).</span></div>';
+  try {
+    const [lista, pend, pagos, oci, prov, meta] = await Promise.all([
+      selTodo('compras_solicitudes_pago', '*', 'id'),
+      selTodo('compras_pend_facturar', '*', 'id'),
+      selTodo('compras_pagos_realizar', '*', 'id'),
+      selTodo('compras_oc_informe', 'oc_numero, proveedor_cod, clasif_cod, remito_numero, comprobante_numero, comprador', 'id'),
+      selTodo('compras_proveedores', 'codigo, razon, comercial', 'id'),
+      selTodo('compras_informes_meta', '*', null),
+    ]);
+    SP.lista = lista.reverse(); SP.pend = pend; SP.pagos = pagos; SP.oci = oci; SP.meta = meta;
+    SP.prov = {}; prov.forEach(p => { SP.prov[String(p.codigo||'').trim().toUpperCase()] = p.razon || p.comercial || ''; });
+  } catch (error) {
+    $main.innerHTML = '<div class="notice">No pude leer los datos de Solicitudes de pago: ' + esc(error.message)
+      + '<br><span class="muted">Si dice "permission denied", falta correr el SQL de habilitación (sql/2026-10_solpago_carga_adminfin.sql del repo 4housing-compras).</span></div>';
     return;
   }
-  SP.lista = data || [];
-  SP.ultimaImport = (ult && ult[0]) || null;
   spRender();
 }
 
-function spRender(){
-  const cuenta = e => SP.lista.filter(s => (s.estado||'Pendiente') === e).length;
-  const chips = [['Pendiente','Pendiente ('+cuenta('Pendiente')+')'], ['En gestión','En gestión ('+cuenta('En gestión')+')'],
-                 ['Pagada','Pagada ('+cuenta('Pagada')+')'], ['todas','Todas ('+SP.lista.length+')']]
-    .map(([v,l]) => '<button class="chip'+(SP.filtro===v?' on':'')+'" data-filtro="'+esc(v)+'">'+esc(l)+'</button>').join('');
-  const ult = SP.ultimaImport ? 'Pagos a realizar importado el ' + fmtFecha(String(SP.ultimaImport.importado_en).slice(0,10)) + (SP.ultimaImport.importado_por ? ' por ' + esc(SP.ultimaImport.importado_por) : '') : 'Pagos a realizar todavía no se importó.';
-  $main.innerHTML =
-    '<div class="panel">'
-    + '<div class="panel-h"><h2>Solicitudes de pago</h2>'
-    +   '<div class="sub">Pedidos de Compras para pagar una factura. Es la misma información que ve Compras: lo que confirmes o comentes acá, Compras lo ve al instante. ' + ult + '</div>'
-    +   (SP.editar ? '<button class="btn-primary btn-sm" id="btn-importar">Importar Pagos a realizar</button>' : '')
-    + '</div>'
-    + '<div class="chips">' + chips + '</div>'
-    + '<div class="tools"><input type="search" id="sp-q" placeholder="Buscar factura, proveedor, OC, auxiliar, comprador…" value="' + esc(SP.q) + '">'
-    +   '<span style="margin-left:auto"></span>'
-    +   (Object.keys(SP.colf).length ? '<button class="btn-sm" id="btn-limpiar-f">Limpiar filtros</button>' : '')
-    +   '<button class="btn-sm" id="btn-ajustar">Ajustar columnas</button></div>'
-    + '<div class="tbl-wrap" id="sp-tabla"></div>'
-    + '</div>';
-  $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
-  const q = document.getElementById('sp-q');
-  q.addEventListener('input', () => { SP.q = q.value; spTabla(); });
-  const bi = document.getElementById('btn-importar'); if (bi) bi.addEventListener('click', spAbrirImportar);
-  const bl = document.getElementById('btn-limpiar-f'); if (bl) bl.addEventListener('click', () => { SP.colf = {}; spRender(); });
-  document.getElementById('btn-ajustar').addEventListener('click', () => { try { localStorage.removeItem(SP_COLW_KEY); } catch(e) {} spTabla(); });
-  spTabla();
+/* ---------- Constancia de los informes ---------- */
+function metaDe(inf){ return SP.meta.find(m => m.informe === inf) || null; }
+function metaTxt(inf){
+  const m = metaDe(inf); if (!m) return 'todavía no se cargó';
+  const t = m.importado_en ? new Date(m.importado_en) : null;
+  return 'reporte del ' + fmtFecha(m.fecha_reporte) + ' · subido el ' + (t ? fmtFecha(m.importado_en) + ' ' + t.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '—') + (m.importado_por ? ' por ' + m.importado_por : '');
 }
 
-function spTabla(){
-  const q = fold(SP.q);
-  const filas = SP.lista.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro)
-    .filter(s => !q || fold([s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' ')).includes(q))
-    .filter(s => SP_COLS.every(c => !c.v || !SP.colf[c.id] || SP.colf[c.id].includes(c.v(s))));
-  const box = document.getElementById('sp-tabla');
-  if (!filas.length) { box.innerHTML = '<p class="msg">No hay solicitudes' + (Object.keys(SP.colf).length || q ? ' que coincidan con los filtros' : (SP.filtro!=='todas' ? ' en este estado' : '')) + '.</p>'; return; }
+/* ---------- Tabla genérica: búsqueda, filtro tipo Excel por columna, rango de fechas, ancho ajustable ---------- */
+// cols: { id, t, v(r) → valor de filtro (o null), fecha(r) → 'YYYY-MM-DD' (filtro por rango), td(r) → html, cls }
+function tablaFiltrar(ns, cols, rows, texto){
+  const q = fold(SP.q[ns] || ''), cf = SP.colf[ns] || {}, fr = SP.fecha[ns] || {};
+  return rows.filter(r => (!q || fold(texto(r)).includes(q))
+    && cols.every(c => {
+      if (c.fecha && fr[c.id]) { const d = c.fecha(r) || ''; if (fr[c.id].desde && d < fr[c.id].desde) return false; if (fr[c.id].hasta && d > fr[c.id].hasta) return false; }
+      return !c.v || !cf[c.id] || cf[c.id].includes(c.v(r));
+    }));
+}
+function tablaHayFiltros(ns){ return Object.keys(SP.colf[ns]||{}).length > 0 || Object.keys(SP.fecha[ns]||{}).length > 0; }
+function tablaHerramientas(ns, placeholder){
+  return '<div class="tools"><input type="search" data-q="' + ns + '" placeholder="' + esc(placeholder) + '" value="' + esc(SP.q[ns]||'') + '">'
+    + '<span style="margin-left:auto"></span>'
+    + (tablaHayFiltros(ns) ? '<button class="btn-sm" data-limpiar="' + ns + '">Limpiar filtros</button>' : '')
+    + '<button class="btn-sm" data-ajustar="' + ns + '">Ajustar columnas</button></div>';
+}
+function tablaHtml(ns, cols, filas, pie){
+  const on = c => (c.fecha ? !!(SP.fecha[ns]||{})[c.id] : !!(SP.colf[ns]||{})[c.id]);
   const th = c => '<th data-col="' + c.id + '">' + esc(c.t)
-    + (c.v ? ' <button class="fbtn' + (SP.colf[c.id] ? ' on' : '') + '" data-f="' + c.id + '" title="Filtrar">▾</button>' : '')
+    + ((c.v || c.fecha) ? ' <button class="fbtn' + (on(c) ? ' on' : '') + '" data-f="' + ns + '|' + c.id + '" title="Filtrar">▾</button>' : '')
     + '<span class="col-rs"></span></th>';
-  box.innerHTML = '<table class="tbl" id="sp-tbl"><thead><tr>' + SP_COLS.map(th).join('') + '</tr></thead><tbody>'
-    + filas.map(s => {
-        const h = s.historial || []; const u = h.length ? h[h.length-1] : null;
-        const est = s.estado || 'Pendiente';
-        const pago = est==='Pagada' && s.fecha_pago ? 'Pagada ' + fmtFecha(s.fecha_pago) : (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : '—');
-        return '<tr>'
-          + '<td><b>' + esc(s.nro_factura || '—') + '</b>' + (s.adjunto_path ? '<div><a href="#" class="lnk" data-pdf="' + s.id + '">ver PDF</a></div>' : '') + '</td>'
-          + '<td><b>' + esc(s.proveedor_cod || '') + '</b><div class="muted">' + esc(s.proveedor || '') + '</div></td>'
-          + '<td>' + esc(nroOC(s.oc_numero) || '—') + '</td>'
-          + '<td>' + esc(s.proyecto_cod || '—') + '</td>'
-          + '<td>' + esc(s.comprador || '') + '</td>'
-          + '<td class="num">' + fmtMonto(s.monto, s.moneda) + '</td>'
-          + '<td><span class="badge ' + (SP_BADGE[est]||'') + '">' + esc(est) + '</span>' + (s.leido_en ? '<div class="muted">✓ leída</div>' : '') + '</td>'
-          + '<td style="white-space:nowrap">' + pago + '</td>'
-          + '<td style="max-width:240px">' + (u ? esc(u.texto || '') + '<div class="muted">' + esc(u.autor || '') + ' · ' + fmtFecha(String(u.fecha||'').slice(0,10)) + '</div>' : '—') + '</td>'
-          + '<td><button class="btn-sm" data-abrir="' + s.id + '">Abrir</button></td>'
-          + '</tr>';
-      }).join('')
-    + '</tbody></table>';
-  box.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', () => spDetalle(b.dataset.abrir)));
-  box.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); spFiltroAbrir(b.dataset.f, b); }));
-  spColAnchos(document.getElementById('sp-tbl'));
-  box.querySelectorAll('[data-pdf]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); spVerPdf(a.dataset.pdf); }));
+  return '<div class="tbl-wrap"><table class="tbl" data-tbl="' + ns + '"><thead><tr>' + cols.map(th).join('') + '</tr></thead><tbody>'
+    + filas.map(r => '<tr>' + cols.map(c => '<td' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + c.td(r) + '</td>').join('') + '</tr>').join('')
+    + '</tbody>' + (pie || '') + '</table></div>';
 }
-
-// ---- Filtro tipo Excel por columna ----
-function spFiltroCerrar(){ const p = document.getElementById('fpop'); if (p) p.remove(); document.removeEventListener('mousedown', spFiltroFuera, true); }
-function spFiltroFuera(e){ const p = document.getElementById('fpop'); if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('.fbtn'))) spFiltroCerrar(); }
-function spFiltroAbrir(colId, btn){
-  spFiltroCerrar();
-  const col = SP_COLS.find(c => c.id === colId); if (!col) return;
-  // Valores posibles: los de las solicitudes del estado elegido (chips), sin aplicar el filtro de esta misma columna
-  const base = SP.lista.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro);
-  const vals = [...new Set(base.map(col.v))].sort((a,b) => String(a).localeCompare(String(b), 'es', { numeric:true }));
-  const sel = new Set(SP.colf[colId] || vals);
-  const pop = document.createElement('div'); pop.id = 'fpop'; pop.className = 'fpop';
-  pop.innerHTML = '<input type="text" id="fpop-q" placeholder="Buscar">'
-    + '<label style="font-weight:600;border-bottom:1px solid var(--line);margin-bottom:.2rem"><input type="checkbox" id="fpop-all"' + (sel.size === vals.length ? ' checked' : '') + '>(Seleccionar todo)</label>'
-    + '<div class="flist">' + vals.map(v => '<label data-v="' + esc(fold(v)) + '"><input type="checkbox" class="fpop-chk" value="' + esc(v) + '"' + (sel.has(v) ? ' checked' : '') + '>' + esc(v) + '</label>').join('') + '</div>'
-    + '<div class="row" style="margin-top:.5rem"><button class="btn-primary btn-sm" id="fpop-ok" style="flex:1;justify-content:center">Aplicar</button><button class="btn-sm" id="fpop-clr" style="flex:1">Limpiar</button></div>';
+const TABLAS = {};   // ns → { cols, base() } para armar los filtros
+function tablaEventos(){
+  $main.querySelectorAll('[data-q]').forEach(inp => inp.addEventListener('input', () => {
+    const ns = inp.dataset.q, pos = inp.selectionStart; SP.q[ns] = inp.value; spRender();
+    const n = $main.querySelector('[data-q="' + ns + '"]'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch(e) {} }
+  }));
+  $main.querySelectorAll('[data-limpiar]').forEach(b => b.addEventListener('click', () => { SP.colf[b.dataset.limpiar] = {}; SP.fecha[b.dataset.limpiar] = {}; spRender(); }));
+  $main.querySelectorAll('[data-ajustar]').forEach(b => b.addEventListener('click', () => { try { localStorage.removeItem('adminfin:colw:' + b.dataset.ajustar); } catch(e) {} spRender(); }));
+  $main.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const [ns, col] = b.dataset.f.split('|'); filtroAbrir(ns, col, b); }));
+  $main.querySelectorAll('table[data-tbl]').forEach(colAnchos);
+}
+function popCerrar(){ const p = document.getElementById('fpop'); if (p) p.remove(); document.removeEventListener('mousedown', popFuera, true); }
+function popFuera(e){ const p = document.getElementById('fpop'); if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('.fbtn'))) popCerrar(); }
+function popUbicar(pop, btn){
   document.body.appendChild(pop);
   const r = btn.getBoundingClientRect(), vw = document.documentElement.clientWidth;
   pop.style.top = (window.scrollY + r.bottom + 4) + 'px';
   pop.style.left = (window.scrollX + Math.max(8, Math.min(r.left, vw - 310))) + 'px';
-  const visibles = () => [...pop.querySelectorAll('.flist label')].filter(l => l.style.display !== 'none');
-  pop.querySelector('#fpop-q').addEventListener('input', e => { const q = fold(e.target.value); pop.querySelectorAll('.flist label').forEach(l => { l.style.display = (!q || l.dataset.v.includes(q)) ? '' : 'none'; }); });
-  pop.querySelector('#fpop-all').addEventListener('change', e => visibles().forEach(l => { l.querySelector('input').checked = e.target.checked; }));
-  pop.querySelector('#fpop-ok').addEventListener('click', () => {
-    const chk = [...pop.querySelectorAll('.fpop-chk')].filter(c => c.checked).map(c => c.value);
-    if (chk.length === vals.length) delete SP.colf[colId]; else SP.colf[colId] = chk;
-    spFiltroCerrar(); spRender();
-  });
-  pop.querySelector('#fpop-clr').addEventListener('click', () => { delete SP.colf[colId]; spFiltroCerrar(); spRender(); });
-  pop.querySelector('#fpop-q').focus();
-  setTimeout(() => document.addEventListener('mousedown', spFiltroFuera, true), 0);
+  setTimeout(() => document.addEventListener('mousedown', popFuera, true), 0);
 }
-
-// ---- Ancho de columnas: se ajusta a mano tirando del borde derecho del título; queda guardado en este navegador ----
-function spColAnchos(table){
-  if (!table) return;
+function filtroAbrir(ns, colId, btn){
+  popCerrar();
+  const T = TABLAS[ns]; const col = T && T.cols.find(c => c.id === colId); if (!col) return;
+  const pop = document.createElement('div'); pop.id = 'fpop'; pop.className = 'fpop';
+  if (col.fecha) {
+    const cur = (SP.fecha[ns]||{})[colId] || {};
+    pop.innerHTML = '<div style="font-weight:600;margin-bottom:.3rem">Rango de fechas</div>'
+      + '<label class="muted" style="display:block">Desde</label><input type="date" id="fp-d" value="' + esc(cur.desde||'') + '" style="width:100%">'
+      + '<label class="muted" style="display:block;margin-top:.3rem">Hasta</label><input type="date" id="fp-h" value="' + esc(cur.hasta||'') + '" style="width:100%">'
+      + '<div class="row" style="margin-top:.5rem"><button class="btn-primary btn-sm" id="fp-ok" style="flex:1;justify-content:center">Aplicar</button><button class="btn-sm" id="fp-clr" style="flex:1">Limpiar</button></div>';
+    popUbicar(pop, btn);
+    pop.querySelector('#fp-ok').addEventListener('click', () => {
+      const d = pop.querySelector('#fp-d').value, h = pop.querySelector('#fp-h').value;
+      SP.fecha[ns] = SP.fecha[ns] || {}; if (d || h) SP.fecha[ns][colId] = { desde:d, hasta:h }; else delete SP.fecha[ns][colId];
+      popCerrar(); spRender();
+    });
+    pop.querySelector('#fp-clr').addEventListener('click', () => { if (SP.fecha[ns]) delete SP.fecha[ns][colId]; popCerrar(); spRender(); });
+    return;
+  }
+  const vals = [...new Set(T.base().map(col.v))].sort((a,b) => String(a).localeCompare(String(b), 'es', { numeric:true }));
+  const sel = new Set((SP.colf[ns]||{})[colId] || vals);
+  pop.innerHTML = '<input type="text" id="fp-q" placeholder="Buscar">'
+    + '<label style="font-weight:600;border-bottom:1px solid var(--line);margin-bottom:.2rem"><input type="checkbox" id="fp-all"' + (sel.size === vals.length ? ' checked' : '') + '>(Seleccionar todo)</label>'
+    + '<div class="flist">' + vals.map(v => '<label data-v="' + esc(fold(v)) + '"><input type="checkbox" class="fp-chk" value="' + esc(v) + '"' + (sel.has(v) ? ' checked' : '') + '>' + esc(v) + '</label>').join('') + '</div>'
+    + '<div class="row" style="margin-top:.5rem"><button class="btn-primary btn-sm" id="fp-ok" style="flex:1;justify-content:center">Aplicar</button><button class="btn-sm" id="fp-clr" style="flex:1">Limpiar</button></div>';
+  popUbicar(pop, btn);
+  const visibles = () => [...pop.querySelectorAll('.flist label')].filter(l => l.style.display !== 'none');
+  pop.querySelector('#fp-q').addEventListener('input', e => { const q = fold(e.target.value); pop.querySelectorAll('.flist label').forEach(l => { l.style.display = (!q || l.dataset.v.includes(q)) ? '' : 'none'; }); });
+  pop.querySelector('#fp-all').addEventListener('change', e => visibles().forEach(l => { l.querySelector('input').checked = e.target.checked; }));
+  pop.querySelector('#fp-ok').addEventListener('click', () => {
+    const chk = [...pop.querySelectorAll('.fp-chk')].filter(c => c.checked).map(c => c.value);
+    SP.colf[ns] = SP.colf[ns] || {}; if (chk.length === vals.length) delete SP.colf[ns][colId]; else SP.colf[ns][colId] = chk;
+    popCerrar(); spRender();
+  });
+  pop.querySelector('#fp-clr').addEventListener('click', () => { if (SP.colf[ns]) delete SP.colf[ns][colId]; popCerrar(); spRender(); });
+  pop.querySelector('#fp-q').focus();
+}
+// Ancho de columnas: se tira del borde derecho del título; queda guardado en este navegador, por tabla
+function colAnchos(table){
+  const k = 'adminfin:colw:' + table.dataset.tbl;
   const ths = [...table.querySelectorAll('thead th')];
-  let saved = null; try { saved = JSON.parse(localStorage.getItem(SP_COLW_KEY) || 'null'); } catch(e) {}
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(k) || 'null'); } catch(e) {}
   if (saved && saved.length === ths.length) { table.classList.add('fixed'); ths.forEach((th,i) => { th.style.width = saved[i] + 'px'; }); }
   ths.forEach(th => {
     const rs = th.querySelector('.col-rs'); if (!rs) return;
@@ -351,13 +370,139 @@ function spColAnchos(table){
       const soltar = () => {
         document.removeEventListener('mousemove', mover); document.removeEventListener('mouseup', soltar);
         rs.classList.remove('on'); document.body.style.cursor = ''; document.body.style.userSelect = '';
-        try { localStorage.setItem(SP_COLW_KEY, JSON.stringify(ths.map(t => Math.round(t.getBoundingClientRect().width)))); } catch(e) {}
+        try { localStorage.setItem(k, JSON.stringify(ths.map(t => Math.round(t.getBoundingClientRect().width)))); } catch(e) {}
       };
       document.addEventListener('mousemove', mover); document.addEventListener('mouseup', soltar);
     });
   });
 }
 
+/* ---------- Pantalla ---------- */
+function spRender(){
+  const tab = (id, l) => '<button class="stab' + (SP.tab === id ? ' on' : '') + '" data-tab="' + id + '">' + l + '</button>';
+  const cargar = SP.editar ? INFORMES.map(([k,l]) => '<button class="btn-sm" data-cargar="' + k + '">Cargar ' + esc(l) + '</button>').join('') : '';
+  $main.innerHTML =
+      '<nav class="secciones"><span class="sec on">Solicitudes de pago</span></nav>'
+    + '<div class="panel" style="margin-bottom:1rem"><div class="panel-h" style="margin-bottom:.4rem"><h2 style="font-size:.95rem">Informes de Tango</h2>'
+    +   '<div class="sub">Los carga Administración y Finanzas; Compras los consulta. Cada carga reemplaza la anterior.</div><div class="row" style="margin:0">' + cargar + '</div></div>'
+    +   '<div class="muted" style="line-height:1.7">' + INFORMES.map(([k,l]) => '<b style="color:var(--ink-soft)">' + esc(l) + ':</b> ' + esc(metaTxt(k))).join(' &nbsp;·&nbsp; ') + '</div></div>'
+    + '<div class="stabs">' + tab('pendfac','Pendientes de facturar') + tab('solicitudes','Pagos solicitados') + tab('pagos','Pagos a realizar') + '</div>'
+    + '<div class="panel">' + (SP.tab === 'pendfac' ? vistaPendFac() : SP.tab === 'pagos' ? vistaPagos() : vistaSolicitudes()) + '</div>';
+  $main.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { SP.tab = b.dataset.tab; spRender(); }));
+  $main.querySelectorAll('[data-cargar]').forEach(b => b.addEventListener('click', () => abrirCarga(b.dataset.cargar)));
+  $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
+  $main.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); spDetalle(b.dataset.abrir); }));
+  $main.querySelectorAll('[data-pdf]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); spVerPdf(a.dataset.pdf); }));
+  tablaEventos();
+}
+function badge(est){ return '<span class="badge ' + (SP_BADGE[est]||'') + '">' + esc(est) + '</span>'; }
+
+/* ---------- Pestaña: Pendientes de facturar ---------- */
+function moneda(m){ return /extranj/i.test(m||'') ? 'USD' : 'ARS'; }
+function difiere(s){ return s.neto_oc != null && s.neto_oc !== '' && Math.abs((+s.monto||0) - (+s.neto_oc||0)) > 1; }
+function vistaPendFac(){
+  const g = {};
+  SP.pend.forEach(r => {
+    const k = key(r.proveedor_cod, nroOC(r.oc_numero));
+    const o = (g[k] = g[k] || { oc_numero:nroOC(r.oc_numero), proveedor_cod:r.proveedor_cod, fecha_ingreso:r.fecha_ingreso, comprador:r.comprador,
+      clasif_cod:r.clasif_cod, clasif_desc:r.clasif_desc, estado:r.estado, moneda:r.moneda, pend:0, total:0, renglones:0 });
+    o.pend += (+r.pend_facturar_sin_imp||0); o.total += (+r.total_pedido_sin_imp||0); o.renglones++;
+  });
+  const todos = Object.values(g).sort((a,b) => String(b.fecha_ingreso||'').localeCompare(String(a.fecha_ingreso||'')));
+  const sols = {}; SP.lista.forEach(s => { const k = key(s.proveedor_cod, nroOC(s.oc_numero)); (sols[k] = sols[k] || []).push(s); });
+  const solsDe = o => sols[key(o.proveedor_cod, o.oc_numero)] || [];
+  const cols = [
+    { id:'oc', t:'OC', v:o => o.oc_numero, td:o => '<b>' + esc(o.oc_numero) + '</b><div class="muted">' + o.renglones + ' renglón' + (o.renglones===1?'':'es') + '</div>' },
+    { id:'prov', t:'Proveedor', v:o => o.proveedor_cod || '(sin proveedor)', td:o => '<b>' + esc(o.proveedor_cod||'') + '</b> <span class="muted">' + esc(provNombre(o.proveedor_cod)) + '</span>' },
+    { id:'ing', t:'Ingreso', fecha:o => o.fecha_ingreso, td:o => fmtFecha(o.fecha_ingreso) },
+    { id:'comp', t:'Comprador', v:o => o.comprador || '(sin comprador)', td:o => esc(o.comprador||'') },
+    { id:'aux', t:'Auxiliar', v:o => o.clasif_desc || o.clasif_cod || '(sin auxiliar)', td:o => esc(o.clasif_desc || o.clasif_cod || '—') },
+    { id:'pend', t:'Pendiente s/imp.', v:null, cls:'num', td:o => fmtMonto(o.pend, moneda(o.moneda)) + '<div class="muted">de ' + fmtMonto(o.total, moneda(o.moneda)) + '</div>' },
+    { id:'est', t:'Estado OC', v:o => o.estado || '(sin estado)', td:o => esc(o.estado||'') },
+    { id:'fac', t:'FAC', v:o => { const ss = solsDe(o); return !ss.length ? 'Sin FAC' : (ss.some(x => x.estado === FAC_CARGADA) ? 'FAC cargada (sin pedir pago)' : 'Pago pedido'); },
+      td:o => solsDe(o).map(s => '<div style="white-space:nowrap">'
+        + '<a href="#" class="lnk" data-abrir="' + s.id + '">' + esc(s.nro_factura || 's/n') + '</a>'
+        + (difiere(s) ? ' <span title="El neto de la FAC no coincide con lo pendiente de la OC" style="color:#b3261e">⚠</span>' : '') + ' ' + badge(s.estado || 'Pendiente') + '</div>').join('') || '<span class="muted">—</span>' },
+  ];
+  TABLAS.pendfac = { cols, base:() => todos };
+  const texto = o => [o.oc_numero, o.proveedor_cod, provNombre(o.proveedor_cod), o.comprador, o.clasif_cod, o.clasif_desc, solsDe(o).map(s => s.nro_factura).join(' ')].join(' ');
+  SP.grupos = tablaFiltrar('pendfac', cols, todos, texto);
+  const head = '<div class="panel-h"><h2>Pendientes de facturar</h2><div class="sub">OCs de Tango con saldo sin facturar. Compras adjunta la FAC de cada OC y pide el pago; acá se ve en qué quedó cada una. Última actualización: ' + esc(metaTxt('pend_facturar')) + '.</div></div>';
+  if (!todos.length) return head + '<p class="msg">Todavía no hay datos: cargá el informe "Pendientes de facturar".</p>';
+  return head + tablaHerramientas('pendfac', 'Buscar OC, proveedor, comprador, auxiliar o FAC…')
+    + (SP.grupos.length ? tablaHtml('pendfac', cols, SP.grupos) : '<p class="msg">Ninguna OC coincide con los filtros.</p>');
+}
+
+/* ---------- Pestaña: Pagos solicitados ---------- */
+function vistaSolicitudes(){
+  const pedidas = SP.lista.filter(s => s.estado !== FAC_CARGADA);
+  const cuenta = e => pedidas.filter(s => (s.estado||'Pendiente') === e).length;
+  const chips = [['Pendiente','Pendiente ('+cuenta('Pendiente')+')'], ['En gestión','En gestión ('+cuenta('En gestión')+')'],
+                 ['Pagada','Pagada ('+cuenta('Pagada')+')'], ['todas','Todas ('+pedidas.length+')']]
+    .map(([v,l]) => '<button class="chip'+(SP.filtro===v?' on':'')+'" data-filtro="'+esc(v)+'">'+esc(l)+'</button>').join('');
+  const base = pedidas.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro);
+  const cols = [
+    { id:'fac', t:'Factura', v:s => s.nro_factura || '(sin N°)', td:s => '<b>' + esc(s.nro_factura || '—') + '</b>' + (s.adjunto_path ? '<div><a href="#" class="lnk" data-pdf="' + s.id + '">ver PDF</a></div>' : '') },
+    { id:'prov', t:'Proveedor', v:s => s.proveedor_cod || '(sin proveedor)', td:s => '<b>' + esc(s.proveedor_cod || '') + '</b><div class="muted">' + esc(s.proveedor || provNombre(s.proveedor_cod)) + '</div>' },
+    { id:'oc', t:'OC', v:s => nroOC(s.oc_numero) || '(sin OC)', td:s => esc(nroOC(s.oc_numero) || '—') },
+    { id:'aux', t:'Auxiliar', v:s => s.proyecto_cod || '(sin auxiliar)', td:s => esc(s.proyecto_cod || '—') },
+    { id:'comp', t:'Comprador', v:s => s.comprador || '(sin comprador)', td:s => esc(s.comprador || '') },
+    { id:'mon', t:'Monto', v:s => s.moneda === 'USD' ? 'Dólares' : 'Pesos', cls:'num', td:s => fmtMonto(s.monto, s.moneda) },
+    { id:'est', t:'Estado', v:s => (s.estado || 'Pendiente') + (s.leido_en ? ' · leída' : ''), td:s => badge(s.estado || 'Pendiente') + (s.leido_en ? '<div class="muted">✓ leída</div>' : '') },
+    { id:'pago', t:'Pago', v:s => s.estado === 'Pagada' ? 'Pagada' : (s.fecha_pago_estimada ? 'Con fecha estimada' : 'Sin fecha'),
+      td:s => '<span style="white-space:nowrap">' + (s.estado === 'Pagada' && s.fecha_pago ? 'Pagada ' + fmtFecha(s.fecha_pago) : (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : '—')) + '</span>' },
+    { id:'ult', t:'Último comentario', v:null, td:s => { const h = s.historial || []; const u = h.length ? h[h.length-1] : null; return u ? esc(u.texto || '') + '<div class="muted">' + esc(u.autor || '') + ' · ' + fmtFecha(String(u.fecha||'').slice(0,10)) + '</div>' : '—'; } },
+    { id:'acc', t:'', v:null, td:s => '<button class="btn-sm" data-abrir="' + s.id + '">Abrir</button>' },
+  ];
+  TABLAS.solicitudes = { cols, base:() => base };
+  const filas = tablaFiltrar('solicitudes', cols, base, s => [s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' '));
+  return '<div class="panel-h"><h2>Pagos solicitados</h2><div class="sub">Pedidos de pago, con fecha y responsable. Lo que confirmes o comentes acá, Compras lo ve al instante.</div></div>'
+    + '<div class="chips">' + chips + '</div>' + tablaHerramientas('solicitudes', 'Buscar factura, proveedor, OC, auxiliar, comprador…')
+    + (filas.length ? tablaHtml('solicitudes', cols, filas) : '<p class="msg">No hay solicitudes' + (tablaHayFiltros('solicitudes') || SP.q.solicitudes ? ' que coincidan con los filtros' : (SP.filtro!=='todas' ? ' en este estado' : '')) + '.</p>');
+}
+
+/* ---------- Pestaña: Pagos a realizar ---------- */
+function vistaPagos(){
+  const rows = SP.pagos.slice().sort((a,b) => String(a.fecha_emision||'').localeCompare(String(b.fecha_emision||'')));
+  const idx = {};
+  SP.oci.forEach(r => {
+    if (!r.comprobante_numero) return;
+    const o = (idx[key(r.proveedor_cod, r.comprobante_numero)] = idx[key(r.proveedor_cod, r.comprobante_numero)] || { aux:new Set(), oc:new Set(), rem:new Set(), comp:'' });
+    if (r.clasif_cod) o.aux.add(String(r.clasif_cod).trim()); if (r.oc_numero) o.oc.add(nroOC(r.oc_numero)); if (r.remito_numero) o.rem.add(String(r.remito_numero).trim()); if (r.comprador && !o.comp) o.comp = r.comprador;
+  });
+  SP.idxPagos = idx;
+  const m = r => idx[key(r.proveedor_cod, r.comprobante_numero)];
+  const lista = (r,k) => { const x = m(r); return x && x[k].size ? [...x[k]].map(esc).join('<br>') : '<span class="muted">—</span>'; };
+  const val = (r,k) => { const x = m(r); return x && x[k].size ? [...x[k]].join(' / ') : '(sin dato)'; };
+  const solPorFac = {}; SP.lista.forEach(s => { solPorFac[claveFac(s.proveedor_cod, s.nro_factura)] = s; });
+  const solDe = r => solPorFac[claveFac(r.proveedor_cod, r.comprobante_numero)] || null;
+  const cols = [
+    { id:'sol', t:'Pago', v:r => { const s = solDe(r); return s ? (s.estado || 'Pendiente') : 'Sin pedir'; },
+      td:r => { const s = solDe(r); return s ? '<a href="#" data-abrir="' + s.id + '">' + badge(s.estado || 'Pendiente') + '</a>' : '<span class="muted">Sin pedir</span>'; } },
+    { id:'fe', t:'Fecha de emisión', fecha:r => r.fecha_emision, td:r => fmtFecha(r.fecha_emision) },
+    { id:'fc', t:'Fecha contable', v:r => r.fecha_contable ? String(r.fecha_contable).slice(0,7) : '(sin fecha)', td:r => fmtFecha(r.fecha_contable) },
+    { id:'tipo', t:'Tipo de comprobante', v:r => r.tipo_comprobante || '(sin tipo)', td:r => esc(r.tipo_comprobante || '') },
+    { id:'prov', t:'Cód. proveedor', v:r => r.proveedor_cod || '(sin proveedor)', td:r => '<b title="' + esc(provNombre(r.proveedor_cod)) + '">' + esc(r.proveedor_cod || '') + '</b>' },
+    { id:'nro', t:'Nro. Comprobante', v:r => r.comprobante_numero || '', td:r => esc(r.comprobante_numero || '') },
+    { id:'tot', t:'Total Pendiente (CTE)', v:null, cls:'num', td:r => fmtNum(r.total_pend_cte) },
+    { id:'aux', t:'Auxiliar', v:r => val(r,'aux'), td:r => lista(r,'aux') },
+    { id:'oc', t:'Orden de compra', v:r => val(r,'oc'), td:r => lista(r,'oc') },
+    { id:'rem', t:'Remito', v:r => val(r,'rem'), td:r => lista(r,'rem') },
+  ];
+  TABLAS.pagos = { cols, base:() => rows };
+  const head = '<div class="panel-h"><h2>Pagos a realizar</h2><div class="sub">Reporte de Tango con el Auxiliar, la OC y el Remito de cada factura (del Informe OC, por proveedor + N° de comprobante). La columna Pago muestra si Compras ya pidió el pago de esa factura. Última actualización: ' + esc(metaTxt('pagos_realizar')) + '.</div></div>';
+  if (!rows.length) return head + '<p class="msg">Todavía no hay datos: cargá el informe "Pagos a realizar".</p>';
+  const visibles = tablaFiltrar('pagos', cols, rows, r => [r.proveedor_cod, provNombre(r.proveedor_cod), r.comprobante_numero, r.tipo_comprobante, val(r,'aux'), val(r,'oc'), val(r,'rem')].join(' '));
+  const sinMatch = rows.filter(r => !m(r)).length;
+  const total = visibles.reduce((a,r) => a + (+r.total_pend_cte||0), 0);
+  const aviso = !SP.oci.length ? '<p class="err">No hay Informe OC cargado: no se pueden completar Auxiliar / OC / Remito.</p>'
+    : (sinMatch ? '<p class="muted" style="margin-bottom:.6rem">' + sinMatch + ' de ' + rows.length + ' facturas no aparecen en el Informe OC (por ejemplo, facturas sin OC, o un Informe OC desactualizado): quedan con "—".</p>' : '');
+  const pie = '<tfoot><tr><td colspan="6" class="num"><b>Total (' + visibles.length + (visibles.length !== rows.length ? ' de ' + rows.length : '') + ')</b></td><td class="num"><b>' + fmtNum(total) + '</b></td><td colspan="3"></td></tr></tfoot>';
+  return head + aviso + tablaHerramientas('pagos', 'Buscar proveedor, comprobante, auxiliar, OC o remito…')
+    + (visibles.length ? tablaHtml('pagos', cols, visibles, pie) : '<p class="msg">Ninguna factura coincide con los filtros.</p>');
+}
+
+/* ---------- Detalle de una solicitud ---------- */
 async function spVerPdf(id){
   const s = SP.lista.find(x => String(x.id) === String(id)); if (!s || !s.adjunto_path) return;
   const w = window.open('', '_blank');   // se abre antes del await para que el navegador no lo bloquee
@@ -365,27 +510,29 @@ async function spVerPdf(id){
   if (error || !data) { if (w) w.close(); toast('No pude abrir el PDF: ' + ((error && error.message) || 'sin permiso')); return; }
   if (w) w.location = data.signedUrl; else window.location = data.signedUrl;
 }
-
 function spDetalle(id){
   const s = SP.lista.find(x => String(x.id) === String(id)); if (!s) return;
   SP.actual = s.id;
   const est = s.estado || 'Pendiente';
   const hist = (s.historial || []).slice().reverse().map(h =>
     '<div class="it">' + esc(h.texto || '') + '<div class="muted">' + esc(h.autor || '') + ' · ' + fmtFecha(String(h.fecha||'').slice(0,10)) + '</div></div>').join('') || '<p class="muted">Sin comentarios.</p>';
-  const acciones = (SP.editar && est !== 'Pagada')
-    ? (s.leido_en ? '' : '<div class="box"><h4>Confirmar lectura</h4><div class="muted">Avisa a Compras que la solicitud ya la tomó Finanzas' + (est==='Pendiente' ? ' y la pasa a "En gestión"' : '') + '.</div><div class="row"><button class="btn-primary btn-sm" id="ac-leido">Confirmar lectura</button></div></div>')
+  let acciones = '';
+  if (est === FAC_CARGADA) {
+    acciones = '<div class="box"><div class="muted">Compras cargó la FAC pero todavía no pidió el pago.</div></div>';
+  } else if (SP.editar && est !== 'Pagada') {
+    acciones = (s.leido_en ? '' : '<div class="box"><h4>Confirmar lectura</h4><div class="muted">Avisa a Compras que la solicitud ya la tomó Finanzas' + (est==='Pendiente' ? ' y la pasa a "En gestión"' : '') + '.</div><div class="row"><button class="btn-primary btn-sm" id="ac-leido">Confirmar lectura</button></div></div>')
       + '<div class="box"><h4>Fecha estimada de pago</h4><div class="row"><input type="date" id="ac-fecha" value="' + esc(s.fecha_pago_estimada || '') + '"><input type="text" id="ac-fecha-msg" placeholder="Mensaje opcional (ej. sale con el lote del viernes)" style="flex:1;min-width:200px"><button class="btn-sm" id="ac-fecha-ok">Informar</button></div></div>'
-      + '<div class="box"><h4>Dejar un mensaje</h4><textarea id="ac-com" rows="2" placeholder="Mensaje para Compras…"></textarea><div class="row"><button class="btn-sm" id="ac-com-ok">Enviar</button></div></div>'
-    : '';
+      + '<div class="box"><h4>Dejar un mensaje</h4><textarea id="ac-com" rows="2" placeholder="Mensaje para Compras…"></textarea><div class="row"><button class="btn-sm" id="ac-com-ok">Enviar</button></div></div>';
+  }
   abrirModal(
     '<h3>Solicitud de pago · ' + esc(s.nro_factura || '') + '</h3>'
     + '<div class="kv">'
-    + '<b>Proveedor:</b> ' + esc(s.proveedor_cod || '') + ' — ' + esc(s.proveedor || '') + '<br>'
+    + '<b>Proveedor:</b> ' + esc(s.proveedor_cod || '') + ' — ' + esc(s.proveedor || provNombre(s.proveedor_cod)) + '<br>'
     + '<b>Factura:</b> ' + esc(s.nro_factura || '—') + (s.adjunto_path ? ' · <a href="#" class="lnk" id="dt-pdf">ver PDF</a>' : '') + '<br>'
     + '<b>OC:</b> ' + esc(nroOC(s.oc_numero) || '—') + ' &nbsp; <b>Remito:</b> ' + esc(s.remito_numero || '—') + '<br>'
     + '<b>Auxiliar:</b> ' + esc(s.proyecto_cod || '—') + ' &nbsp; <b>Comprador:</b> ' + esc(s.comprador || '—') + '<br>'
     + '<b>Monto:</b> ' + fmtMonto(s.monto, s.moneda) + '<br>'
-    + '<b>Estado:</b> <span class="badge ' + (SP_BADGE[est]||'') + '">' + esc(est) + '</span>'
+    + '<b>Estado:</b> ' + badge(est)
     + (s.leido_en ? '<br><b>Leída:</b> ' + esc(s.leido_por || '') + ' · ' + fmtFecha(String(s.leido_en).slice(0,10)) : '')
     + (s.fecha_pago_estimada ? '<br><b>Fecha estimada de pago:</b> ' + fmtFecha(s.fecha_pago_estimada) : '')
     + (s.fecha_pago ? '<br><b>Pagada:</b> ' + fmtFecha(s.fecha_pago) + ' <span class="muted">(cuando dejó de figurar en Pagos a realizar)</span>' : '')
@@ -409,27 +556,17 @@ function spDetalle(id){
     spAccion(s.id, 'comentario', null, t);
   });
 }
-
 async function spAccion(id, accion, fecha, texto){
   const err = document.getElementById('ac-err'); if (err) err.textContent = '';
   const { data, error } = await sb.rpc('compras_solpago_adminfin', { p_id: +id, p_accion: accion, p_fecha: fecha || null, p_texto: texto || null });
   if (error) { if (err) err.textContent = 'Error: ' + error.message; return; }
   const i = SP.lista.findIndex(x => String(x.id) === String(id));
   if (i >= 0 && data) SP.lista[i] = data;
-  toast(accion === 'leido' ? 'Lectura confirmada' : accion === 'fecha_pago' ? 'Fecha de pago informada' : 'Mensaje enviado');
+  toast({ leido:'Lectura confirmada', fecha_pago:'Fecha de pago informada', comentario:'Mensaje enviado' }[accion] || 'Listo');
   spRender(); spDetalle(id);
 }
 
-// ---- Importar "Pagos a realizar" (Tango → Mis Consultas → Reportes Diarios) ----
-function spAbrirImportar(){
-  abrirModal('<h3>Importar Pagos a realizar</h3>'
-    + '<p class="muted" style="margin-bottom:.8rem">Subí el Excel de Tango "Pagos a realizar". Reemplaza el informe anterior. Toda solicitud cuya factura figuraba en el informe anterior y ya no está pasa a <b>Pagada</b>. Una factura que todavía nunca apareció en el informe no se toca.</p>'
-    + '<input type="file" id="imp-file" accept=".xlsx,.xls">'
-    + '<div class="err" id="imp-err"></div><div class="okmsg" id="imp-ok"></div>'
-    + '<div class="foot"><button id="imp-cerrar">Cerrar</button><button class="btn-primary btn-sm" id="imp-ok-btn">Importar</button></div>');
-  document.getElementById('imp-cerrar').addEventListener('click', cerrarModal);
-  document.getElementById('imp-ok-btn').addEventListener('click', spImportar);
-}
+/* ---------- Carga de informes de Tango ---------- */
 function _xNorm(s){ return String(s==null?'':s).trim(); }
 function _xIdx(H, ...c){ const h=H.map(x=>fold(_xNorm(x))); for (const n of c){ const i=h.indexOf(fold(n)); if (i>=0) return i; } return -1; }
 function _xNum(v){ if (typeof v==='number') return v; if (v==null || v==='') return null; const n=parseFloat(String(v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?null:n; }
@@ -441,38 +578,116 @@ function _xFecha(v){
   if (m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
   return null;
 }
-async function spImportar(){
-  const f = (document.getElementById('imp-file').files || [])[0];
-  const err = document.getElementById('imp-err'), ok = document.getElementById('imp-ok');
+const CARGAS = {
+  oc_informe: { titulo:'Informe OC', test:H => _xIdx(H,'NRO ORDEN COMPRA')>=0 && _xIdx(H,'COD CLASIFICACIÓN','COD CLASIFICACION')>=0,
+    falta:'"NRO ORDEN COMPRA" y "COD CLASIFICACIÓN"',
+    filas(rows){
+      const H = rows[0], c = (...n) => _xIdx(H, ...n), g = (r,i) => i>=0 ? r[i] : '';
+      const ix = { fecha:c('FECHA EMISION'), clasif:c('COD CLASIFICACIÓN','COD CLASIFICACION'), oc:c('NRO ORDEN COMPRA'), ren:c('RENGLÓN','RENGLON'),
+        rem:c('NRO REMITO'), prov:c('COD PROVEEDOR'), art:c('COD ARTÍCULO','COD ARTICULO'), desc:c('DESCRIPCIÓN','DESCRIPCION'),
+        cped:c('CANTIDAD_PEDIDA'), crec:c('CANTIDAD_RECIBIDA'), cpen:c('CANTIDAD_PENDIENTE'), imp:c('IMPORTE_NETO'), eoc:c('ESTADO OC'), obs:c('OBSERVACIO'),
+        fent:c('FECHA ENTREGA'), dep:c('DEPÓSITO','DEPOSITO'), comp:c('NOMBRE DEL COMPRADOR'), tsin:c('TOTAL_SIN_IVA_DE_LA_OC'), tcon:c('TOTAL_CON_IVA_DE_LA_OC'),
+        cond:c('CONDICIÓN DE COMPRA','CONDICION DE COMPRA'), tipo:c('TIPO COMP.','TIPO COMP'), nro:c('NRO. COMPROBANTE','NRO COMPROBANTE'),
+        dcomp:c('DESC.COMPROBANTE','DESC COMPROBANTE'), epago:c('ESTADO') };
+      const out = [];
+      for (let k=1; k<rows.length; k++) {
+        const r = rows[k], oc = _xNorm(g(r,ix.oc)); if (!oc) continue;
+        out.push({ fecha_emision:_xFecha(g(r,ix.fecha)), clasif_cod:_xNorm(g(r,ix.clasif)), oc_numero:nroOC(oc), renglon:_xNum(g(r,ix.ren)),
+          remito_numero:_xNorm(g(r,ix.rem)), proveedor_cod:_xNorm(g(r,ix.prov)), cod_articulo:_xNorm(g(r,ix.art)), descripcion:_xNorm(g(r,ix.desc)),
+          cantidad_pedida:_xNum(g(r,ix.cped)), cantidad_recibida:_xNum(g(r,ix.crec)), cantidad_pendiente:_xNum(g(r,ix.cpen)), importe_neto:_xNum(g(r,ix.imp)),
+          estado_oc:_xNorm(g(r,ix.eoc)), observacion:_xNorm(g(r,ix.obs)), fecha_entrega:_xFecha(g(r,ix.fent)), deposito:_xNorm(g(r,ix.dep)),
+          comprador:_xNorm(g(r,ix.comp)), total_sin_iva_oc:_xNum(g(r,ix.tsin)), total_con_iva_oc:_xNum(g(r,ix.tcon)), condicion_compra:_xNorm(g(r,ix.cond)),
+          tipo_comprobante:_xNorm(g(r,ix.tipo)), comprobante_numero:_xNorm(g(r,ix.nro)), desc_comprobante:_xNorm(g(r,ix.dcomp)), estado_pago:_xNorm(g(r,ix.epago)) });
+      }
+      return out;
+    } },
+  pend_facturar: { titulo:'Pendientes de facturar', test:H => _xIdx(H,'Nro. Orden de Compra')>=0 && _xIdx(H,'Pendiente de facturar sin impuestos')>=0,
+    falta:'"Nro. Orden de Compra" y "Pendiente de facturar sin impuestos"',
+    filas(rows){
+      const H = rows[0], c = (...n) => _xIdx(H, ...n), g = (r,i) => i>=0 ? r[i] : '';
+      const ix = { tal:c('Talonario oc'), oc:c('Nro. Orden de Compra'), prov:c('Cód. proveedor','Cod. proveedor'), fecha:c('Fecha de ingreso'),
+        comp:c('Nombre del comprador'), clasif:c('Cód. clasificación (Comprobante)','Cod. clasificacion (Comprobante)'),
+        cdesc:c('Descripción Clasificación (Comprobante)','Descripcion Clasificacion (Comprobante)'), art:c('Cód. Artículo','Cod. Articulo'),
+        desc:c('Descripción','Descripcion'), cped:c('Cantidad pedida'), cpen:c('Cantidad Pendiente de Facturar'), tped:c('Total pedido sin impuestos'),
+        pend:c('Pendiente de facturar sin impuestos'), est:c('Estado'), estr:c('Estado del renglón','Estado del renglon'), cost:c('COSTEO (Adic.)'),
+        estru:c('ESTRUCTURA (Adic.)'), ley:[1,2,3,4,5].map(n => c('Leyenda'+n)), cond:c('Condición de compra','Condicion de compra'), mon:c('Moneda') };
+      const out = [];
+      for (let k=1; k<rows.length; k++) {
+        const r = rows[k], oc = _xNorm(g(r,ix.oc)); if (!oc) continue;   // la última fila de Tango es el total
+        const tal = _xNum(g(r,ix.tal));
+        out.push({ talonario: tal==null ? null : Math.round(tal), oc_numero:nroOC(oc), proveedor_cod:_xNorm(g(r,ix.prov)), fecha_ingreso:_xFecha(g(r,ix.fecha)),
+          comprador:_xNorm(g(r,ix.comp)), clasif_cod:_xNorm(g(r,ix.clasif)), clasif_desc:_xNorm(g(r,ix.cdesc)), cod_articulo:_xNorm(g(r,ix.art)),
+          descripcion:_xNorm(g(r,ix.desc)), cantidad_pedida:_xNum(g(r,ix.cped)), cantidad_pend_facturar:_xNum(g(r,ix.cpen)),
+          total_pedido_sin_imp:_xNum(g(r,ix.tped)), pend_facturar_sin_imp:_xNum(g(r,ix.pend)), estado:_xNorm(g(r,ix.est)), estado_renglon:_xNorm(g(r,ix.estr)),
+          costeo:_xNorm(g(r,ix.cost)), estructura:_xNorm(g(r,ix.estru)), leyendas:ix.ley.map(i => _xNorm(g(r,i))).filter(Boolean).join(' · '),
+          condicion_compra:_xNorm(g(r,ix.cond)), moneda:_xNorm(g(r,ix.mon)) });
+      }
+      return out;
+    } },
+  pagos_realizar: { titulo:'Pagos a realizar', test:H => _xIdx(H,'Nro. Comprobante')>=0 && _xIdx(H,'Total Pendiente (CTE)')>=0,
+    falta:'"Nro. Comprobante" y "Total Pendiente (CTE)"',
+    filas(rows){
+      const H = rows[0], c = (...n) => _xIdx(H, ...n), g = (r,i) => i>=0 ? r[i] : '';
+      const ix = { fe:c('Fecha de emisión','Fecha de emision'), fc:c('Fecha contable'), tipo:c('Tipo de comprobante'), prov:c('Cód. proveedor','Cod. proveedor'),
+        nro:c('Nro. Comprobante'), cte:c('Total Pendiente (CTE)'), ext:c('Total Pendiente (EXT)') };
+      const out = [];
+      for (let k=1; k<rows.length; k++) {
+        const r = rows[k], nro = _xNorm(g(r,ix.nro)); if (!nro) continue;   // la última fila de Tango es el total
+        out.push({ fecha_emision:_xFecha(g(r,ix.fe)), fecha_contable:_xFecha(g(r,ix.fc)), tipo_comprobante:_xNorm(g(r,ix.tipo)),
+          proveedor_cod:_xNorm(g(r,ix.prov)), comprobante_numero:nro, total_pend_cte:_xNum(g(r,ix.cte)), total_pend_ext:_xNum(g(r,ix.ext)) });
+      }
+      return out;
+    } },
+};
+function hoyISO(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function abrirCarga(inf){
+  const C = CARGAS[inf]; if (!C || !SP.editar) return;
+  abrirModal('<h3>Cargar ' + esc(C.titulo) + '</h3>'
+    + '<p class="muted" style="margin-bottom:.8rem">Subí el Excel de Tango "' + esc(C.titulo) + '". Reemplaza lo cargado antes; Compras lo ve al instante.'
+    + (inf === 'pagos_realizar' ? ' Toda solicitud cuya factura figuraba en el informe anterior y ya no está pasa a <b>Pagada</b>; una factura que todavía nunca apareció no se toca.' : '') + '</p>'
+    + '<div class="row"><label>Fecha del reporte *<br><input type="date" id="imp-fecha" value="' + hoyISO() + '"></label>'
+    + '<label style="flex:1">Archivo (.xlsx) *<br><input type="file" id="imp-file" accept=".xlsx,.xls"></label></div>'
+    + '<div class="err" id="imp-err"></div><div class="okmsg" id="imp-ok"></div>'
+    + '<div class="foot"><button id="imp-cerrar">Cerrar</button><button class="btn-primary btn-sm" id="imp-ok-btn">Cargar</button></div>');
+  document.getElementById('imp-cerrar').addEventListener('click', cerrarModal);
+  document.getElementById('imp-ok-btn').addEventListener('click', () => cargarInforme(inf));
+}
+async function cargarInforme(inf){
+  const C = CARGAS[inf];
+  const f = (document.getElementById('imp-file').files || [])[0], fecha = document.getElementById('imp-fecha').value;
+  const err = document.getElementById('imp-err'), ok = document.getElementById('imp-ok'), btn = document.getElementById('imp-ok-btn');
   err.textContent = ''; ok.textContent = '';
+  if (!fecha) { err.textContent = 'Poné la fecha del reporte.'; return; }
   if (!f) { err.textContent = 'Elegí el archivo.'; return; }
+  btn.disabled = true;
   try {
     ok.textContent = 'Leyendo…';
     const wb = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type:'array' });
     let rows = null;
     for (const name of wb.SheetNames) {
       const rr = XLSX.utils.sheet_to_json(wb.Sheets[name], { header:1, raw:true, defval:'' });
-      if (rr.length && _xIdx(rr[0],'Nro. Comprobante')>=0 && _xIdx(rr[0],'Total Pendiente (CTE)')>=0) { rows = rr; break; }
+      if (rr.length && C.test(rr[0].map(_xNorm))) { rows = rr; break; }
     }
-    if (!rows) throw new Error('No encontré una hoja con las columnas "Nro. Comprobante" y "Total Pendiente (CTE)".');
-    const H = rows[0];
-    const ix = { fe:_xIdx(H,'Fecha de emisión','Fecha de emision'), fc:_xIdx(H,'Fecha contable'), tipo:_xIdx(H,'Tipo de comprobante'),
-      prov:_xIdx(H,'Cód. proveedor','Cod. proveedor'), nro:_xIdx(H,'Nro. Comprobante'), cte:_xIdx(H,'Total Pendiente (CTE)'), ext:_xIdx(H,'Total Pendiente (EXT)') };
-    const g = (r,i) => i>=0 ? r[i] : '';
-    const filas = [];
-    for (let k=1; k<rows.length; k++) {
-      const r = rows[k]; const nro = _xNorm(g(r,ix.nro)); if (!nro) continue;   // la última fila de Tango es el total
-      filas.push({ fecha_emision:_xFecha(g(r,ix.fe)), fecha_contable:_xFecha(g(r,ix.fc)), tipo_comprobante:_xNorm(g(r,ix.tipo)),
-        proveedor_cod:_xNorm(g(r,ix.prov)), comprobante_numero:nro, total_pend_cte:_xNum(g(r,ix.cte)), total_pend_ext:_xNum(g(r,ix.ext)) });
-    }
+    if (!rows) throw new Error('No encontré una hoja con las columnas ' + C.falta + '.');
+    const filas = C.filas(rows);
     if (!filas.length) throw new Error('No encontré filas de datos.');
-    ok.textContent = 'Guardando ' + filas.length + ' facturas…';
-    const { data, error } = await sb.rpc('compras_pagos_realizar_importar', { p_filas: filas });
-    if (error) throw new Error(error.message);
-    cerrarModal();
-    toast('Pagos a realizar: ' + data.filas + ' facturas · ' + (data.pagadas===1 ? '1 solicitud pasó' : data.pagadas + ' solicitudes pasaron') + ' a Pagada');
+    if (inf === 'pagos_realizar') {
+      ok.textContent = 'Guardando ' + filas.length + ' facturas…';
+      const { data, error } = await sb.rpc('compras_pagos_realizar_importar', { p_filas: filas, p_fecha_reporte: fecha });
+      if (error) throw new Error(error.message);
+      cerrarModal();
+      toast('Pagos a realizar: ' + data.filas + ' facturas · ' + (data.pagadas===1 ? '1 solicitud pasó' : data.pagadas + ' solicitudes pasaron') + ' a Pagada');
+    } else {
+      // En tandas de 1000 filas: la primera reemplaza todo, las siguientes agregan
+      for (let k = 0; k < filas.length; k += 1000) {
+        ok.textContent = 'Guardando ' + Math.min(k + 1000, filas.length) + ' de ' + filas.length + ' filas…';
+        const { error } = await sb.rpc('compras_informe_cargar', { p_informe: inf, p_filas: filas.slice(k, k + 1000), p_reset: k === 0, p_fecha_reporte: fecha });
+        if (error) throw new Error(error.message + (k > 0 ? ' (quedaron cargadas ' + k + ' de ' + filas.length + ' filas: volvé a cargar el archivo completo)' : ''));
+      }
+      cerrarModal(); toast(C.titulo + ' cargado: ' + filas.length + ' filas');
+    }
     spCargar();
-  } catch (e) { ok.textContent = ''; err.textContent = 'Error: ' + (e.message || e); }
+  } catch (e) { ok.textContent = ''; err.textContent = 'Error: ' + (e.message || e); btn.disabled = false; }
 }
 
 async function salir(){
