@@ -84,6 +84,8 @@
   .b-gest{background:var(--accent-soft);color:var(--accent-ink);}
   .b-pag{background:color-mix(in srgb, var(--ok) 15%, transparent);color:var(--ok);}
   .b-gris{background:var(--line);color:var(--ink-soft);}
+  .b-canc{background:color-mix(in srgb, #b3261e 12%, transparent);color:#b3261e;}
+  table.tbl th[data-sort]{cursor:pointer;}
   /* Solapas de la app (sección) y pestañas internas */
   .secciones{display:flex;gap:.3rem;border-bottom:1px solid var(--line);margin:-1rem 0 1rem;}
   .sec{font-size:.88rem;font-weight:600;padding:.5rem .9rem;border-bottom:2px solid transparent;color:var(--ink-soft);}
@@ -201,15 +203,28 @@ function vistaApp(perfil, cargo){
    Solicitudes de pago — misma solapa que en la app de Compras (4housing-compras),
    sobre las MISMAS tablas del proyecto wcpk (no hay copia ni sincronización):
      · Pendientes de facturar · Pagos solicitados · Pagos a realizar
+   Estados: Compras pide (Pendiente) o cancela (Cancelada); Administración informa En gestión y Pagada.
    Reparto: Compras pide el pago (adjunta la FAC / tilda la factura); Administración sube los 3 informes
    de Tango (Informe OC, Pendientes de facturar, Pagos a realizar) y responde la gestión de cada pedido
    (confirmar lectura, fecha estimada de pago, mensajes). Escritura solo por funciones:
    compras_informe_cargar / compras_pagos_realizar_importar / compras_solpago_adminfin.
    ========================================================================== */
 const SP = { editar:false, tab:'solicitudes', filtro:'Pendiente', lista:[], pend:[], pagos:[], oci:[], prov:{}, meta:[],
-             q:{}, colf:{}, fecha:{}, actual:null, grupos:[] };
+             q:{}, colf:{}, fecha:{}, sort:{}, actual:null, grupos:[] };
 const FAC_CARGADA = 'FAC cargada';
-const SP_BADGE = { 'FAC cargada':'b-gris', 'Pendiente':'b-pend', 'En gestión':'b-gest', 'Pagada':'b-pag' };
+const SP_BADGE = { 'FAC cargada':'b-gris', 'Pendiente':'b-pend', 'En gestión':'b-gest', 'Pagada':'b-pag', 'Cancelada':'b-canc' };
+const activa = s => s && s.estado !== 'Cancelada';   // un pedido cancelado no bloquea volver a pedir esa factura
+// Quién y cuándo, para cada comentario: "usuario · 02/10/2026 11:26"
+function cuando(h){
+  const d = h && h.fecha ? new Date(h.fecha) : null;
+  return esc((h && h.autor) || '') + ' · ' + (d && !isNaN(d) ? d.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',hour12:false}) : '');
+}
+// Columna "Pago": pagada / fecha estimada / fuera del informe
+function pagoTxt(s){
+  if (s.estado === 'Pagada') return 'Pagada' + (s.fecha_pago ? ' ' + fmtFecha(s.fecha_pago) : '');
+  return (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : '—')
+    + (s.salio_informe_en ? '<div style="color:var(--warn)" title="Ya no figura en Pagos a realizar: se estima pagada, anulada u otro motivo">⚠ fuera del informe ' + fmtFecha(s.salio_informe_en) + '</div>' : '');
+}
 const INFORMES = [['oc_informe','Informe OC'], ['pend_facturar','Pendientes de facturar'], ['pagos_realizar','Pagos a realizar']];
 
 function fmtFecha(v){ if(!v) return '—'; const p=String(v).slice(0,10).split('-'); return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : String(v); }
@@ -267,12 +282,26 @@ function metaDe(inf){ return SP.meta.find(m => m.informe === inf) || null; }
 function metaTxt(inf){
   const m = metaDe(inf); if (!m) return 'todavía no se cargó';
   const t = m.importado_en ? new Date(m.importado_en) : null;
-  return 'reporte del ' + fmtFecha(m.fecha_reporte) + ' · subido el ' + (t ? fmtFecha(m.importado_en) + ' ' + t.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '—') + (m.importado_por ? ' por ' + m.importado_por : '');
+  return 'reporte del ' + fmtFecha(m.fecha_reporte) + ' · subido el ' + (t ? t.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + t.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',hour12:false}) : '—') + (m.importado_por ? ' por ' + m.importado_por : '');
 }
 
 /* ---------- Tabla genérica: búsqueda, filtro tipo Excel por columna, rango de fechas, ancho ajustable ---------- */
 // cols: { id, t, v(r) → valor de filtro (o null), fecha(r) → 'YYYY-MM-DD' (filtro por rango), td(r) → html, cls }
+// Orden: clic en el título (no en ▾ ni en el borde de ajuste). c.s(r) = clave de orden (por defecto c.fecha / c.v).
+function tablaOrdenar(ns, cols, rows){
+  const o = SP.sort[ns]; const c = o && cols.find(x => x.id === o.col); if (!c) return rows;
+  const k = c.s || c.fecha || c.v; if (!k) return rows;
+  return rows.slice().sort((a,b) => {
+    const x = k(a), y = k(b);
+    if (x == null || x === '') return 1; if (y == null || y === '') return -1;   // vacíos siempre al final
+    const r = (typeof x === 'number' && typeof y === 'number') ? x - y : String(x).localeCompare(String(y), 'es', { numeric:true });
+    return r * o.dir;
+  });
+}
 function tablaFiltrar(ns, cols, rows, texto){
+  return tablaOrdenar(ns, cols, tablaFiltrarSinOrden(ns, cols, rows, texto));
+}
+function tablaFiltrarSinOrden(ns, cols, rows, texto){
   const q = fold(SP.q[ns] || ''), cf = SP.colf[ns] || {}, fr = SP.fecha[ns] || {};
   return rows.filter(r => (!q || fold(texto(r)).includes(q))
     && cols.every(c => {
@@ -289,7 +318,9 @@ function tablaHerramientas(ns, placeholder){
 }
 function tablaHtml(ns, cols, filas, pie){
   const on = c => (c.fecha ? !!(SP.fecha[ns]||{})[c.id] : !!(SP.colf[ns]||{})[c.id]);
-  const th = c => '<th data-col="' + c.id + '">' + esc(c.t)
+  const o = SP.sort[ns];
+  const th = c => '<th data-col="' + c.id + '"' + ((c.s || c.fecha || c.v) ? ' data-sort="' + ns + '|' + c.id + '" title="Ordenar"' : '') + '>' + esc(c.t)
+    + (o && o.col === c.id ? (o.dir === 1 ? ' ▲' : ' ▼') : '')
     + ((c.v || c.fecha) ? ' <button class="fbtn' + (on(c) ? ' on' : '') + '" data-f="' + ns + '|' + c.id + '" title="Filtrar">▾</button>' : '')
     + '<span class="col-rs"></span></th>';
   return '<div class="tbl-wrap"><table class="tbl" data-tbl="' + ns + '"><thead><tr>' + cols.map(th).join('') + '</tr></thead><tbody>'
@@ -305,6 +336,11 @@ function tablaEventos(){
   $main.querySelectorAll('[data-limpiar]').forEach(b => b.addEventListener('click', () => { SP.colf[b.dataset.limpiar] = {}; SP.fecha[b.dataset.limpiar] = {}; spRender(); }));
   $main.querySelectorAll('[data-ajustar]').forEach(b => b.addEventListener('click', () => { try { localStorage.removeItem('adminfin:colw:' + b.dataset.ajustar); } catch(e) {} spRender(); }));
   $main.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const [ns, col] = b.dataset.f.split('|'); filtroAbrir(ns, col, b); }));
+  $main.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', e => {
+    if (e.target.closest('.fbtn, .col-rs')) return;
+    const [ns, col] = th.dataset.sort.split('|'); const o = SP.sort[ns];
+    SP.sort[ns] = { col, dir: (o && o.col === col && o.dir === 1) ? -1 : 1 }; spRender();
+  }));
   $main.querySelectorAll('table[data-tbl]').forEach(colAnchos);
 }
 function popCerrar(){ const p = document.getElementById('fpop'); if (p) p.remove(); document.removeEventListener('mousedown', popFuera, true); }
@@ -412,14 +448,14 @@ function vistaPendFac(){
   const sols = {}; SP.lista.forEach(s => { const k = key(s.proveedor_cod, nroOC(s.oc_numero)); (sols[k] = sols[k] || []).push(s); });
   const solsDe = o => sols[key(o.proveedor_cod, o.oc_numero)] || [];
   const cols = [
-    { id:'oc', t:'OC', v:o => o.oc_numero, td:o => '<b>' + esc(o.oc_numero) + '</b><div class="muted">' + o.renglones + ' renglón' + (o.renglones===1?'':'es') + '</div>' },
+    { id:'oc', t:'OC', v:o => o.oc_numero, s:o => +o.oc_numero || o.oc_numero, td:o => '<b>' + esc(o.oc_numero) + '</b><div class="muted">' + o.renglones + ' renglón' + (o.renglones===1?'':'es') + '</div>' },
     { id:'prov', t:'Proveedor', v:o => o.proveedor_cod || '(sin proveedor)', td:o => '<b>' + esc(o.proveedor_cod||'') + '</b> <span class="muted">' + esc(provNombre(o.proveedor_cod)) + '</span>' },
     { id:'ing', t:'Ingreso', fecha:o => o.fecha_ingreso, td:o => fmtFecha(o.fecha_ingreso) },
     { id:'comp', t:'Comprador', v:o => o.comprador || '(sin comprador)', td:o => esc(o.comprador||'') },
     { id:'aux', t:'Auxiliar', v:o => o.clasif_desc || o.clasif_cod || '(sin auxiliar)', td:o => esc(o.clasif_desc || o.clasif_cod || '—') },
-    { id:'pend', t:'Pendiente s/imp.', v:null, cls:'num', td:o => fmtMonto(o.pend, moneda(o.moneda)) + '<div class="muted">de ' + fmtMonto(o.total, moneda(o.moneda)) + '</div>' },
+    { id:'pend', t:'Pendiente s/imp.', v:null, s:o => o.pend, cls:'num', td:o => fmtMonto(o.pend, moneda(o.moneda)) + '<div class="muted">de ' + fmtMonto(o.total, moneda(o.moneda)) + '</div>' },
     { id:'est', t:'Estado OC', v:o => o.estado || '(sin estado)', td:o => esc(o.estado||'') },
-    { id:'fac', t:'FAC', v:o => { const ss = solsDe(o); return !ss.length ? 'Sin FAC' : (ss.some(x => x.estado === FAC_CARGADA) ? 'FAC cargada (sin pedir pago)' : 'Pago pedido'); },
+    { id:'fac', t:'FAC', v:o => { const ss = solsDe(o).filter(activa); return !ss.length ? 'Sin FAC' : (ss.some(x => x.estado === FAC_CARGADA) ? 'FAC cargada (sin pedir pago)' : 'Pago pedido'); },
       td:o => solsDe(o).map(s => '<div style="white-space:nowrap">'
         + '<a href="#" class="lnk" data-abrir="' + s.id + '">' + esc(s.nro_factura || 's/n') + '</a>'
         + (difiere(s) ? ' <span title="El neto de la FAC no coincide con lo pendiente de la OC" style="color:#b3261e">⚠</span>' : '') + ' ' + badge(s.estado || 'Pendiente') + '</div>').join('') || '<span class="muted">—</span>' },
@@ -438,7 +474,7 @@ function vistaSolicitudes(){
   const pedidas = SP.lista.filter(s => s.estado !== FAC_CARGADA);
   const cuenta = e => pedidas.filter(s => (s.estado||'Pendiente') === e).length;
   const chips = [['Pendiente','Pendiente ('+cuenta('Pendiente')+')'], ['En gestión','En gestión ('+cuenta('En gestión')+')'],
-                 ['Pagada','Pagada ('+cuenta('Pagada')+')'], ['todas','Todas ('+pedidas.length+')']]
+                 ['Pagada','Pagada ('+cuenta('Pagada')+')'], ['Cancelada','Cancelada ('+cuenta('Cancelada')+')'], ['todas','Todas ('+pedidas.length+')']]
     .map(([v,l]) => '<button class="chip'+(SP.filtro===v?' on':'')+'" data-filtro="'+esc(v)+'">'+esc(l)+'</button>').join('');
   const base = pedidas.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro);
   const cols = [
@@ -447,16 +483,17 @@ function vistaSolicitudes(){
     { id:'oc', t:'OC', v:s => nroOC(s.oc_numero) || '(sin OC)', td:s => esc(nroOC(s.oc_numero) || '—') },
     { id:'aux', t:'Auxiliar', v:s => s.proyecto_cod || '(sin auxiliar)', td:s => esc(s.proyecto_cod || '—') },
     { id:'comp', t:'Comprador', v:s => s.comprador || '(sin comprador)', td:s => esc(s.comprador || '') },
-    { id:'mon', t:'Monto', v:s => s.moneda === 'USD' ? 'Dólares' : 'Pesos', cls:'num', td:s => fmtMonto(s.monto, s.moneda) },
+    { id:'mon', t:'Monto', v:s => s.moneda === 'USD' ? 'Dólares' : 'Pesos', s:s => +s.monto || 0, cls:'num', td:s => fmtMonto(s.monto, s.moneda) },
     { id:'est', t:'Estado', v:s => (s.estado || 'Pendiente') + (s.leido_en ? ' · leída' : ''), td:s => badge(s.estado || 'Pendiente') + (s.leido_en ? '<div class="muted">✓ leída</div>' : '') },
-    { id:'pago', t:'Pago', v:s => s.estado === 'Pagada' ? 'Pagada' : (s.fecha_pago_estimada ? 'Con fecha estimada' : 'Sin fecha'),
-      td:s => '<span style="white-space:nowrap">' + (s.estado === 'Pagada' && s.fecha_pago ? 'Pagada ' + fmtFecha(s.fecha_pago) : (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : '—')) + '</span>' },
-    { id:'ult', t:'Último comentario', v:null, td:s => { const h = s.historial || []; const u = h.length ? h[h.length-1] : null; return u ? esc(u.texto || '') + '<div class="muted">' + esc(u.autor || '') + ' · ' + fmtFecha(String(u.fecha||'').slice(0,10)) + '</div>' : '—'; } },
+    { id:'pago', t:'Pago', v:s => s.estado === 'Pagada' ? 'Pagada' : (s.salio_informe_en ? 'Fuera del informe' : (s.fecha_pago_estimada ? 'Con fecha estimada' : 'Sin fecha')),
+      s:s => s.fecha_pago || s.fecha_pago_estimada || '', td:s => '<span style="white-space:nowrap">' + pagoTxt(s) + '</span>' },
+    { id:'ult', t:'Último comentario', v:null, s:s => { const h = s.historial || []; return h.length ? String(h[h.length-1].fecha || '') : ''; },
+      td:s => { const h = s.historial || []; const u = h.length ? h[h.length-1] : null; return u ? esc(u.texto || '') + '<div class="muted">' + cuando(u) + '</div>' : '—'; } },
     { id:'acc', t:'', v:null, td:s => '<button class="btn-sm" data-abrir="' + s.id + '">Abrir</button>' },
   ];
   TABLAS.solicitudes = { cols, base:() => base };
   const filas = tablaFiltrar('solicitudes', cols, base, s => [s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' '));
-  return '<div class="panel-h"><h2>Pagos solicitados</h2><div class="sub">Pedidos de pago, con fecha y responsable. Lo que confirmes o comentes acá, Compras lo ve al instante.</div></div>'
+  return '<div class="panel-h"><h2>Pagos solicitados</h2><div class="sub">Pedidos de pago de Compras. Acá se informa el estado (En gestión / Pagada), la fecha estimada de pago y los mensajes; Compras lo ve al instante.</div></div>'
     + '<div class="chips">' + chips + '</div>' + tablaHerramientas('solicitudes', 'Buscar factura, proveedor, OC, auxiliar, comprador…')
     + (filas.length ? tablaHtml('solicitudes', cols, filas) : '<p class="msg">No hay solicitudes' + (tablaHayFiltros('solicitudes') || SP.q.solicitudes ? ' que coincidan con los filtros' : (SP.filtro!=='todas' ? ' en este estado' : '')) + '.</p>');
 }
@@ -474,7 +511,7 @@ function vistaPagos(){
   const m = r => idx[key(r.proveedor_cod, r.comprobante_numero)];
   const lista = (r,k) => { const x = m(r); return x && x[k].size ? [...x[k]].map(esc).join('<br>') : '<span class="muted">—</span>'; };
   const val = (r,k) => { const x = m(r); return x && x[k].size ? [...x[k]].join(' / ') : '(sin dato)'; };
-  const solPorFac = {}; SP.lista.forEach(s => { solPorFac[claveFac(s.proveedor_cod, s.nro_factura)] = s; });
+  const solPorFac = {}; SP.lista.filter(activa).forEach(s => { solPorFac[claveFac(s.proveedor_cod, s.nro_factura)] = s; });
   const solDe = r => solPorFac[claveFac(r.proveedor_cod, r.comprobante_numero)] || null;
   const cols = [
     { id:'sol', t:'Pago', v:r => { const s = solDe(r); return s ? (s.estado || 'Pendiente') : 'Sin pedir'; },
@@ -484,7 +521,7 @@ function vistaPagos(){
     { id:'tipo', t:'Tipo de comprobante', v:r => r.tipo_comprobante || '(sin tipo)', td:r => esc(r.tipo_comprobante || '') },
     { id:'prov', t:'Cód. proveedor', v:r => r.proveedor_cod || '(sin proveedor)', td:r => '<b title="' + esc(provNombre(r.proveedor_cod)) + '">' + esc(r.proveedor_cod || '') + '</b>' },
     { id:'nro', t:'Nro. Comprobante', v:r => r.comprobante_numero || '', td:r => esc(r.comprobante_numero || '') },
-    { id:'tot', t:'Total Pendiente (CTE)', v:null, cls:'num', td:r => fmtNum(r.total_pend_cte) },
+    { id:'tot', t:'Total Pendiente (CTE)', v:null, s:r => +r.total_pend_cte || 0, cls:'num', td:r => fmtNum(r.total_pend_cte) },
     { id:'aux', t:'Auxiliar', v:r => val(r,'aux'), td:r => lista(r,'aux') },
     { id:'oc', t:'Orden de compra', v:r => val(r,'oc'), td:r => lista(r,'oc') },
     { id:'rem', t:'Remito', v:r => val(r,'rem'), td:r => lista(r,'rem') },
@@ -515,14 +552,24 @@ function spDetalle(id){
   SP.actual = s.id;
   const est = s.estado || 'Pendiente';
   const hist = (s.historial || []).slice().reverse().map(h =>
-    '<div class="it">' + esc(h.texto || '') + '<div class="muted">' + esc(h.autor || '') + ' · ' + fmtFecha(String(h.fecha||'').slice(0,10)) + '</div></div>').join('') || '<p class="muted">Sin comentarios.</p>';
+    '<div class="it">' + esc(h.texto || '') + '<div class="muted">' + cuando(h) + (h.estado_nuevo ? ' · pasó a "' + esc(h.estado_nuevo) + '"' : '') + '</div></div>').join('') || '<p class="muted">Sin comentarios.</p>';
+  // Administración informa el estado (En gestión / Pagada), la fecha estimada y deja mensajes.
+  const boxPagada = '<div class="box"><h4>Marcar Pagada</h4><div class="row"><label>Fecha de pago *<br><input type="date" id="ac-pag-f"></label><input type="text" id="ac-pag-msg" placeholder="Comentario opcional (ej. transferencia Macro)" style="flex:1;min-width:200px;align-self:flex-end"><button class="btn-primary btn-sm" id="ac-pag-ok" style="align-self:flex-end">Marcar Pagada</button></div></div>';
+  const boxCom = '<div class="box"><h4>Dejar un mensaje</h4><textarea id="ac-com" rows="2" placeholder="Mensaje para Compras…"></textarea><div class="row"><button class="btn-sm" id="ac-com-ok">Enviar</button></div></div>';
   let acciones = '';
   if (est === FAC_CARGADA) {
     acciones = '<div class="box"><div class="muted">Compras cargó la FAC pero todavía no pidió el pago.</div></div>';
-  } else if (SP.editar && est !== 'Pagada') {
-    acciones = (s.leido_en ? '' : '<div class="box"><h4>Confirmar lectura</h4><div class="muted">Avisa a Compras que la solicitud ya la tomó Finanzas' + (est==='Pendiente' ? ' y la pasa a "En gestión"' : '') + '.</div><div class="row"><button class="btn-primary btn-sm" id="ac-leido">Confirmar lectura</button></div></div>')
+  } else if (!SP.editar) {
+    acciones = '';
+  } else if (est === 'Pagada') {
+    acciones = boxCom;
+  } else if (est === 'Cancelada') {
+    acciones = '<div class="box"><div class="muted">Compras canceló este pedido de pago (eso no quiere decir que no se haya pagado).</div></div>' + boxPagada + boxCom;
+  } else {
+    acciones = (est === 'Pendiente' ? '<div class="box"><h4>En gestión</h4><div class="muted">Avisa a Compras que Finanzas ya la tomó.</div><div class="row"><button class="btn-primary btn-sm" id="ac-leido">Pasar a En gestión</button></div></div>' : '')
+      + boxPagada
       + '<div class="box"><h4>Fecha estimada de pago</h4><div class="row"><input type="date" id="ac-fecha" value="' + esc(s.fecha_pago_estimada || '') + '"><input type="text" id="ac-fecha-msg" placeholder="Mensaje opcional (ej. sale con el lote del viernes)" style="flex:1;min-width:200px"><button class="btn-sm" id="ac-fecha-ok">Informar</button></div></div>'
-      + '<div class="box"><h4>Dejar un mensaje</h4><textarea id="ac-com" rows="2" placeholder="Mensaje para Compras…"></textarea><div class="row"><button class="btn-sm" id="ac-com-ok">Enviar</button></div></div>';
+      + boxCom;
   }
   abrirModal(
     '<h3>Solicitud de pago · ' + esc(s.nro_factura || '') + '</h3>'
@@ -535,7 +582,8 @@ function spDetalle(id){
     + '<b>Estado:</b> ' + badge(est)
     + (s.leido_en ? '<br><b>Leída:</b> ' + esc(s.leido_por || '') + ' · ' + fmtFecha(String(s.leido_en).slice(0,10)) : '')
     + (s.fecha_pago_estimada ? '<br><b>Fecha estimada de pago:</b> ' + fmtFecha(s.fecha_pago_estimada) : '')
-    + (s.fecha_pago ? '<br><b>Pagada:</b> ' + fmtFecha(s.fecha_pago) + ' <span class="muted">(cuando dejó de figurar en Pagos a realizar)</span>' : '')
+    + (s.fecha_pago ? '<br><b>Pagada el:</b> ' + fmtFecha(s.fecha_pago) : '')
+    + (s.salio_informe_en ? '<br><b style="color:var(--warn)">⚠ Fuera de Pagos a realizar desde el reporte del ' + fmtFecha(s.salio_informe_en) + '</b> <span class="muted">(se estima pagada, anulada u otro motivo)</span>' : '')
     + '</div>'
     + acciones
     + '<div class="err" id="ac-err"></div>'
@@ -545,6 +593,11 @@ function spDetalle(id){
   document.getElementById('dt-cerrar').addEventListener('click', cerrarModal);
   const pdf = document.getElementById('dt-pdf'); if (pdf) pdf.addEventListener('click', e => { e.preventDefault(); spVerPdf(s.id); });
   const bl = document.getElementById('ac-leido'); if (bl) bl.addEventListener('click', () => spAccion(s.id, 'leido'));
+  const bpg = document.getElementById('ac-pag-ok'); if (bpg) bpg.addEventListener('click', () => {
+    const f = document.getElementById('ac-pag-f').value;
+    if (!f) { document.getElementById('ac-err').textContent = 'Poné la fecha de pago.'; return; }
+    spAccion(s.id, 'pagada', f, document.getElementById('ac-pag-msg').value);
+  });
   const bf = document.getElementById('ac-fecha-ok'); if (bf) bf.addEventListener('click', () => {
     const f = document.getElementById('ac-fecha').value;
     if (!f) { document.getElementById('ac-err').textContent = 'Elegí la fecha.'; return; }
@@ -562,7 +615,7 @@ async function spAccion(id, accion, fecha, texto){
   if (error) { if (err) err.textContent = 'Error: ' + error.message; return; }
   const i = SP.lista.findIndex(x => String(x.id) === String(id));
   if (i >= 0 && data) SP.lista[i] = data;
-  toast({ leido:'Lectura confirmada', fecha_pago:'Fecha de pago informada', comentario:'Mensaje enviado' }[accion] || 'Listo');
+  toast({ leido:'Pasó a En gestión', pagada:'Marcada como Pagada', fecha_pago:'Fecha estimada informada', comentario:'Mensaje enviado' }[accion] || 'Listo');
   spRender(); spDetalle(id);
 }
 
@@ -644,7 +697,7 @@ function abrirCarga(inf){
   const C = CARGAS[inf]; if (!C || !SP.editar) return;
   abrirModal('<h3>Cargar ' + esc(C.titulo) + '</h3>'
     + '<p class="muted" style="margin-bottom:.8rem">Subí el Excel de Tango "' + esc(C.titulo) + '". Reemplaza lo cargado antes; Compras lo ve al instante.'
-    + (inf === 'pagos_realizar' ? ' Toda solicitud cuya factura figuraba en el informe anterior y ya no está pasa a <b>Pagada</b>; una factura que todavía nunca apareció no se toca.' : '') + '</p>'
+    + (inf === 'pagos_realizar' ? ' Si una factura con pedido de pago ya no figura, se le agrega un comentario ("se estima pagada, anulada u otro motivo") y una marca; el estado no cambia: lo sigue informando Administración.' : '') + '</p>'
     + '<div class="row"><label>Fecha del reporte *<br><input type="date" id="imp-fecha" value="' + hoyISO() + '"></label>'
     + '<label style="flex:1">Archivo (.xlsx) *<br><input type="file" id="imp-file" accept=".xlsx,.xls"></label></div>'
     + '<div class="err" id="imp-err"></div><div class="okmsg" id="imp-ok"></div>'
@@ -676,7 +729,7 @@ async function cargarInforme(inf){
       const { data, error } = await sb.rpc('compras_pagos_realizar_importar', { p_filas: filas, p_fecha_reporte: fecha });
       if (error) throw new Error(error.message);
       cerrarModal();
-      toast('Pagos a realizar: ' + data.filas + ' facturas · ' + (data.pagadas===1 ? '1 solicitud pasó' : data.pagadas + ' solicitudes pasaron') + ' a Pagada');
+      toast('Pagos a realizar: ' + data.filas + ' facturas · ' + (data.salieron===1 ? '1 solicitud ya no figura' : data.salieron + ' solicitudes ya no figuran') + ' en el informe');
     } else {
       // En tandas de 1000 filas: la primera reemplaza todo, las siguientes agregan
       for (let k = 0; k < filas.length; k += 1000) {
