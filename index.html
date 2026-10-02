@@ -910,7 +910,8 @@ async function cargarInforme(inf){
    ========================================================================== */
 const CUY_T = 'adminfin_contabilidad_uy';
 const CUY = { lista:[], cargado:false, movs:[], plan:{}, movErr:'', tab:'comp', asTab:'fac',
-              ctaSel:{ banco:'Santander USD', efectivo:'Efectivo pesos' }, sel:{ fac:new Set(), mov:new Set() } };
+              ctaSel:{ banco:'Santander USD', efectivo:'Efectivo pesos' }, sel:{ fac:new Set(), mov:new Set() },
+              dic:{ cuentas:[], eerr:[] }, dicErr:'' };
 // Rubros de la hoja "Listas" del Excel CONTABILIDAD_UY_AVANCE_ORIENTAL (sugerencias; se puede escribir otro)
 const CUY_RUBROS = ['A) VENTA','B) CMV VENTA','C) VENTA ALQUILER MODULO','D) COSTO ALQUILER MODULOS','E) VENTA ALQUILER REEFER','F) COSTO ALQUILER REEFER',
   'G) VENTA SERV TERCERIZADOS','H) COSTO SERV TERCERIZADOS','I) LOGISTICA EGRESOS','I) LOGISTICA INGRESOS','J) OTROS INGRESOS','K) ESTRUCTURA','L) OTROS EGRESOS',
@@ -941,6 +942,7 @@ async function cuyCargar(){
     CUY.lista = filas.sort((a,b) => String(a.fecha||'').localeCompare(String(b.fecha||'')) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
     if (extra.error) { CUY.movErr = extra.error.message || String(extra.error); CUY.movs = []; CUY.plan = {}; }
     else { CUY.movErr = ''; CUY.movs = extra[0]; CUY.plan = {}; extra[1].forEach(p => { CUY.plan[p.clave] = p; }); }
+    await cuyCargarDic();
     CUY.cargado = true;
   } catch (error) {
     if (VISTA !== 'cuy') return;
@@ -1189,7 +1191,26 @@ const CUY_AS_CLASE = 'Básico', CUY_AS_TIPO = 'CN', CUY_AS_ESTADO = 'Borrador', 
 
 const r2 = v => Math.round((+v || 0) * 100) / 100;
 function fmtMon(v, mon){ return v == null ? '—' : (mon === 'USD' ? 'US$ ' : '$U ') + fmtNum(v); }
-const cuyPlan = k => CUY.plan[k] || {};
+// Valores por defecto del plan (los pisa lo cargado en adminfin_cuy_plan). Cuentas del Santander UY: dato de Micaela.
+const CUY_PLAN_DEF = { 'CUENTA:Santander USD': { codigo:'11120025', nombre:'Santander UY USD' }, 'CUENTA:Santander pesos': { codigo:'11120026', nombre:'Santander UY' } };
+function cuyPlan(k){
+  const d = CUY_PLAN_DEF[k] || {}, p = CUY.plan[k] || {}, out = Object.assign({}, d);
+  Object.keys(p).forEach(c => { if (p[c] != null && p[c] !== '') out[c] = p[c]; });
+  return out;
+}
+/* Diccionario contable de Compras (mismo plan de cuentas Tango que Argentina): compras_cuentas_contables y
+   compras_aux_opciones (tipo 2 = EERR). Lectura para adminfin: sql/2026-10_contabilidad_uy_diccionario.sql.
+   Si no se puede leer, el plan se carga igual a mano (sin buscador ni validación). */
+async function cuyCargarDic(){
+  try {
+    const [cu, op] = await Promise.all([selTodo('compras_cuentas_contables', 'cod, descripcion, habil', null), selTodo('compras_aux_opciones', 'tipo_cod, cod, descripcion, habil', null)]);
+    CUY.dic = { cuentas: cu.map(c => ({ cod:String(c.cod).trim(), desc:c.descripcion || '', habil:c.habil })).sort((a,b) => a.cod.localeCompare(b.cod)),
+                eerr: op.filter(o => String(o.tipo_cod) === '2').map(o => ({ cod:String(o.cod).trim(), desc:o.descripcion || '', habil:o.habil })) };
+    CUY.dicErr = CUY.dic.cuentas.length ? '' : 'el diccionario volvió vacío (¿falta correr sql/2026-10_contabilidad_uy_diccionario.sql?)';
+  } catch (e) { CUY.dic = { cuentas:[], eerr:[] }; CUY.dicErr = e.message || String(e); }
+}
+const cuyDicCta = cod => CUY.dic.cuentas.find(c => c.cod === String(cod || '').trim()) || null;
+const cuyDicEerr = cod => CUY.dic.eerr.find(c => c.cod === String(cod || '').trim()) || null;
 function cuyLey(parts){ let out = ''; for (const p of parts.filter(x => x != null && String(x).trim() !== '')) { const c = out ? out + ' - ' + p : String(p); if (c.length > CUY_LEY_MAX && out) break; out = c; } return out.slice(0, CUY_LEY_MAX); }
 // Total de una factura expresado en la moneda de la cuenta (convierte con su TC si la moneda es otra)
 function cuyEnMoneda(r, mon){
@@ -1649,6 +1670,7 @@ function cuyAsientoHojas(asientos){
     a.lineas.forEach(l => {
       if (!r2(l.monto)) return;
       nro++; const p = cuyPlan(l.clave), cod = p.codigo || ''; if (!cod) noti(l.clave, a);
+      else if (CUY.dic.cuentas.length && !cuyDicCta(cod)) noti(l.clave + ' (el código ' + cod + ' no está en el diccionario)', a);
       const imp = r2(Math.abs(l.monto));
       ren.push([a.id, nro, cod, l.monto > 0 ? imp : '', l.monto < 0 ? imp : '', fecha, l.leyenda || '', '', '', 'No', '']);
       // Aux 02 EERR: solo si la cuenta lo tiene cargado en el plan (las cuentas patrimoniales no llevan)
@@ -1675,7 +1697,7 @@ function cuyAsientoExportar(asientos, nombre){
   if (!faltan.length && !s.sinTc.length) { cuyAsientoBajar(asientos, nombre); return; }
   abrirModal('Faltan datos para el asiento',
     '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52;line-height:1.5">Así como está, Tango lo va a rechazar o va a quedar incompleto. Completá el <b>Plan de cuentas</b> (o cargá el TC) y volvé a exportar.</p><div class="hist" style="max-height:300px">'
-    + faltan.map(k => '<div class="it"><b>' + esc(k) + '</b> sin código · ' + s.falta[k].length + ' asiento(s)</div>').join('')
+    + faltan.map(k => '<div class="it"><b>' + esc(k) + '</b>' + (k.includes('no está en el diccionario') ? '' : ' sin código') + ' · ' + s.falta[k].length + ' asiento(s)</div>').join('')
     + (s.sinTc.length ? '<div class="it"><b>Sin TC (cotización)</b> · ' + s.sinTc.map(esc).join(', ') + '</div>' : '') + '</div>',
     '<button class="btn ghost" id="ae-plan">Ir al plan de cuentas</button><button class="btn ghost" id="ae-igual">Exportar igual</button>', 'wide');
   document.getElementById('ae-plan').addEventListener('click', () => { cerrarModal(); CUY.tab = 'plan'; cuyRender(); });
@@ -1758,7 +1780,13 @@ function cuyPlanClaves(){
 function cuyRenderPlan(){
   document.getElementById('topActions').innerHTML = '';
   const filas = cuyPlanClaves(), ns = 'plan';
-  const inp = (x, campo, ph) => SP.editar ? '<input class="tc-in" style="width:' + (campo === 'nombre' ? 220 : 110) + 'px;text-align:left" data-plan="' + esc(x.clave) + '" data-campo="' + campo + '" value="' + esc(cuyPlan(x.clave)[campo] || '') + '" placeholder="' + esc(ph || '') + '">' : esc(cuyPlan(x.clave)[campo] || '—');
+  const lista = { codigo:'dl-dic-cta', aux_eerr:'dl-dic-eerr' };
+  const inp = (x, campo, ph) => SP.editar ? '<input class="tc-in" style="width:' + (campo === 'nombre' ? 220 : 110) + 'px;text-align:left" data-plan="' + esc(x.clave) + '" data-campo="' + campo + '" value="' + esc(cuyPlan(x.clave)[campo] || '') + '" placeholder="' + esc(ph || '') + '"'
+      + (lista[campo] && !(campo === 'codigo' && x.clave.startsWith('MONEDA:')) ? ' list="' + lista[campo] + '"' : '') + '>' : esc(cuyPlan(x.clave)[campo] || '—');
+  const enDic = x => { const p = cuyPlan(x.clave); if (x.clave.startsWith('MONEDA:') || !p.codigo || !CUY.dic.cuentas.length) return '<span class="muted">—</span>';
+    const c = cuyDicCta(p.codigo), e = p.aux_eerr ? cuyDicEerr(p.aux_eerr) : null;
+    return (c ? '<span style="color:#4f8a53">✓ ' + esc(c.desc) + '</span>' + (String(c.habil || '').toLowerCase() === 'no' ? ' <span class="warn">(no habilitada)</span>' : '') : '<span class="warn">⚠ no está en el diccionario</span>')
+      + (p.aux_eerr ? '<div class="muted">EERR: ' + (e ? esc(e.desc) : '<span class="warn">⚠ ' + esc(p.aux_eerr) + ' no existe</span>') + '</div>' : ''); };
   const cols = [
     { id:'grupo', t:'Grupo', v:x => x.grupo, td:x => esc(x.grupo) },
     { id:'clave', t:'Concepto', s:x => x.clave, td:x => '<strong>' + esc(x.desc) + '</strong><div class="muted">' + esc(x.clave) + '</div>' },
@@ -1767,20 +1795,26 @@ function cuyRenderPlan(){
     { id:'cod', t:'Código Tango', td:x => inp(x, 'codigo', x.clave.startsWith('MONEDA:') ? 'código moneda' : 'código cuenta') },
     { id:'nom', t:'Nombre de la cuenta', td:x => inp(x, 'nombre', '') },
     { id:'eerr', t:'Aux. 02 EERR', td:x => x.eerr ? inp(x, 'aux_eerr', 'código') : '<span class="muted">—</span>' },
+    { id:'dic', t:'Diccionario', td:enDic },
   ];
+  const dls = '<datalist id="dl-dic-cta">' + CUY.dic.cuentas.filter(c => String(c.habil || '').toLowerCase() !== 'no').map(c => '<option value="' + esc(c.cod) + '">' + esc(c.cod + ' - ' + c.desc) + '</option>').join('') + '</datalist>'
+    + '<datalist id="dl-dic-eerr">' + CUY.dic.eerr.map(c => '<option value="' + esc(c.cod) + '">' + esc(c.cod + ' - ' + c.desc) + '</option>').join('') + '</datalist>';
   TABLAS[ns] = { cols, base: () => filas };
   const f = tablaFiltrar(ns, cols, filas, x => x.clave + ' ' + x.desc + ' ' + (cuyPlan(x.clave).codigo || '') + ' ' + (cuyPlan(x.clave).nombre || ''));
   const sin = filas.filter(x => !cuyPlan(x.clave).codigo).length;
   $main.innerHTML = cuyTabs()
     + '<div class="meta-bar">Con estos códigos se arman los asientos. Los conceptos salen solos de lo cargado (rubros de las facturas, clasificaciones de los movimientos). <b>' + sin + ' sin código.</b> '
-    + 'Los códigos son los del plan de cuentas de Avance Oriental SAS en Tango: no los conozco, hay que cargarlos (los de Tesorería son de la empresa argentina y no sirven acá).</div>'
+    + 'Es el mismo plan de cuentas Tango que Argentina: en Código escribí el número o parte del nombre y elegí del diccionario de Compras'
+    + (CUY.dicErr ? ' — <span class="warn">no pude leer el diccionario (' + esc(CUY.dicErr) + '): se puede cargar igual a mano, sin buscador ni validación</span>' : ' (' + CUY.dic.cuentas.length + ' cuentas)') + '.</div>' + dls
     + '<div class="card">' + cardH('Plan de cuentas UY', 'Se guarda al salir de cada casilla (o con Enter). En amarillo: sin código.')
     + tablaHerramientas(ns, 'Buscar concepto o código…') + tablaHtml(ns, cols, f, '', x => cuyPlan(x.clave).codigo ? '' : 'revisar') + '</div>';
   tablaEventos(); cuyTabsEventos();
   $main.querySelectorAll('[data-plan]').forEach(i => {
     i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
     i.addEventListener('change', async () => {
-      try { await cuyPlanGuardar(i.dataset.plan, { [i.dataset.campo]: i.value.trim() || null }); toast('Guardado'); cuyRender(); }
+      const v = i.value.trim() || null, cambios = { [i.dataset.campo]: v };
+      if (i.dataset.campo === 'codigo' && v) { const c = cuyDicCta(v); if (c) cambios.nombre = c.desc; }   // el nombre sale del diccionario
+      try { await cuyPlanGuardar(i.dataset.plan, cambios); toast('Guardado'); cuyRender(); }
       catch (e) { toast('No se guardó: ' + (e.message || e)); }
     });
   });
