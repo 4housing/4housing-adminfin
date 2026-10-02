@@ -62,7 +62,20 @@
   textarea{width:100%;resize:vertical;}
   .tbl-wrap{overflow-x:auto;}
   table.tbl{width:100%;border-collapse:collapse;font-size:.83rem;}
-  table.tbl th{text-align:left;font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:.5rem .6rem;border-bottom:1px solid var(--line);white-space:nowrap;}
+  table.tbl th{text-align:center;vertical-align:middle;font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:.5rem 1rem .5rem .6rem;border-bottom:1px solid var(--line);white-space:nowrap;position:relative;}
+  table.tbl.fixed{table-layout:fixed;}
+  table.tbl.fixed th{white-space:normal;line-height:1.3;}
+  table.tbl.fixed td{overflow:hidden;text-overflow:ellipsis;}
+  /* Tirador para ajustar el ancho a mano: borde derecho de cada título */
+  .col-rs{position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;}
+  .col-rs:hover,.col-rs.on{background:var(--accent-soft);}
+  /* Filtro tipo Excel por columna */
+  .fbtn{border:none;background:none;padding:0 .2rem;font-size:.7rem;color:var(--ink-faint);cursor:pointer;}
+  .fbtn.on{color:var(--accent);font-weight:700;}
+  .fpop{position:absolute;z-index:70;background:var(--paper);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:.5rem;min-width:210px;max-width:300px;font-size:.82rem;}
+  .fpop input[type=text]{width:100%;margin-bottom:.4rem;}
+  .fpop .flist{max-height:230px;overflow:auto;}
+  .fpop label{display:flex;gap:.4rem;align-items:center;padding:.15rem .2rem;cursor:pointer;}
   table.tbl td{padding:.55rem .6rem;border-bottom:1px solid var(--line);vertical-align:top;}
   table.tbl td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}
   .muted{color:var(--ink-faint);font-size:.75rem;}
@@ -182,7 +195,21 @@ function vistaApp(perfil, cargo){
    Importa "Pagos a realizar" de Tango con compras_pagos_realizar_importar(): reemplaza la
    foto y pasa a Pagada toda FAC que figuraba en el informe anterior y ya no está.
    ========================================================================== */
-const SP = { editar:false, lista:[], filtro:'Pendiente', q:'', ultimaImport:null, actual:null };
+const SP = { editar:false, lista:[], filtro:'Pendiente', q:'', ultimaImport:null, actual:null, colf:{} };
+// Columnas de la tabla: id, título y valor para el filtro tipo Excel (null = sin filtro).
+const SP_COLS = [
+  { id:'fac',    t:'Factura',           v:s => s.nro_factura || '(sin N°)' },
+  { id:'prov',   t:'Proveedor',         v:s => s.proveedor_cod || '(sin proveedor)' },
+  { id:'oc',     t:'OC',                v:s => nroOC(s.oc_numero) || '(sin OC)' },
+  { id:'aux',    t:'Auxiliar',          v:s => s.proyecto_cod || '(sin auxiliar)' },
+  { id:'comp',   t:'Comprador',         v:s => s.comprador || '(sin comprador)' },
+  { id:'mon',    t:'Monto',             v:s => s.moneda === 'USD' ? 'Dólares' : 'Pesos' },
+  { id:'estado', t:'Estado',            v:s => (s.estado || 'Pendiente') + (s.leido_en ? ' · leída' : '') },
+  { id:'pago',   t:'Pago',              v:s => s.estado === 'Pagada' ? 'Pagada' : (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : 'Sin fecha') },
+  { id:'ult',    t:'Último comentario', v:null },
+  { id:'acc',    t:'',                  v:null },
+];
+const SP_COLW_KEY = 'adminfin:colw:solpago';
 const SP_ESTADOS = ['Pendiente','En gestión','Pagada'];
 const SP_BADGE = { 'Pendiente':'b-pend', 'En gestión':'b-gest', 'Pagada':'b-pag' };
 
@@ -225,23 +252,32 @@ function spRender(){
     +   (SP.editar ? '<button class="btn-primary btn-sm" id="btn-importar">Importar Pagos a realizar</button>' : '')
     + '</div>'
     + '<div class="chips">' + chips + '</div>'
-    + '<div class="tools"><input type="search" id="sp-q" placeholder="Buscar factura, proveedor, OC, auxiliar, comprador…" value="' + esc(SP.q) + '"></div>'
+    + '<div class="tools"><input type="search" id="sp-q" placeholder="Buscar factura, proveedor, OC, auxiliar, comprador…" value="' + esc(SP.q) + '">'
+    +   '<span style="margin-left:auto"></span>'
+    +   (Object.keys(SP.colf).length ? '<button class="btn-sm" id="btn-limpiar-f">Limpiar filtros</button>' : '')
+    +   '<button class="btn-sm" id="btn-ajustar">Ajustar columnas</button></div>'
     + '<div class="tbl-wrap" id="sp-tabla"></div>'
     + '</div>';
   $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
   const q = document.getElementById('sp-q');
   q.addEventListener('input', () => { SP.q = q.value; spTabla(); });
   const bi = document.getElementById('btn-importar'); if (bi) bi.addEventListener('click', spAbrirImportar);
+  const bl = document.getElementById('btn-limpiar-f'); if (bl) bl.addEventListener('click', () => { SP.colf = {}; spRender(); });
+  document.getElementById('btn-ajustar').addEventListener('click', () => { try { localStorage.removeItem(SP_COLW_KEY); } catch(e) {} spTabla(); });
   spTabla();
 }
 
 function spTabla(){
   const q = fold(SP.q);
   const filas = SP.lista.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro)
-    .filter(s => !q || fold([s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' ')).includes(q));
+    .filter(s => !q || fold([s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' ')).includes(q))
+    .filter(s => SP_COLS.every(c => !c.v || !SP.colf[c.id] || SP.colf[c.id].includes(c.v(s))));
   const box = document.getElementById('sp-tabla');
-  if (!filas.length) { box.innerHTML = '<p class="msg">No hay solicitudes' + (SP.filtro!=='todas' ? ' en este estado' : '') + '.</p>'; return; }
-  box.innerHTML = '<table class="tbl"><thead><tr><th>Factura</th><th>Proveedor</th><th>OC</th><th>Auxiliar</th><th>Comprador</th><th style="text-align:right">Monto</th><th>Estado</th><th>Pago</th><th>Último comentario</th><th></th></tr></thead><tbody>'
+  if (!filas.length) { box.innerHTML = '<p class="msg">No hay solicitudes' + (Object.keys(SP.colf).length || q ? ' que coincidan con los filtros' : (SP.filtro!=='todas' ? ' en este estado' : '')) + '.</p>'; return; }
+  const th = c => '<th data-col="' + c.id + '">' + esc(c.t)
+    + (c.v ? ' <button class="fbtn' + (SP.colf[c.id] ? ' on' : '') + '" data-f="' + c.id + '" title="Filtrar">▾</button>' : '')
+    + '<span class="col-rs"></span></th>';
+  box.innerHTML = '<table class="tbl" id="sp-tbl"><thead><tr>' + SP_COLS.map(th).join('') + '</tr></thead><tbody>'
     + filas.map(s => {
         const h = s.historial || []; const u = h.length ? h[h.length-1] : null;
         const est = s.estado || 'Pendiente';
@@ -261,7 +297,65 @@ function spTabla(){
       }).join('')
     + '</tbody></table>';
   box.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', () => spDetalle(b.dataset.abrir)));
+  box.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); spFiltroAbrir(b.dataset.f, b); }));
+  spColAnchos(document.getElementById('sp-tbl'));
   box.querySelectorAll('[data-pdf]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); spVerPdf(a.dataset.pdf); }));
+}
+
+// ---- Filtro tipo Excel por columna ----
+function spFiltroCerrar(){ const p = document.getElementById('fpop'); if (p) p.remove(); document.removeEventListener('mousedown', spFiltroFuera, true); }
+function spFiltroFuera(e){ const p = document.getElementById('fpop'); if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('.fbtn'))) spFiltroCerrar(); }
+function spFiltroAbrir(colId, btn){
+  spFiltroCerrar();
+  const col = SP_COLS.find(c => c.id === colId); if (!col) return;
+  // Valores posibles: los de las solicitudes del estado elegido (chips), sin aplicar el filtro de esta misma columna
+  const base = SP.lista.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro);
+  const vals = [...new Set(base.map(col.v))].sort((a,b) => String(a).localeCompare(String(b), 'es', { numeric:true }));
+  const sel = new Set(SP.colf[colId] || vals);
+  const pop = document.createElement('div'); pop.id = 'fpop'; pop.className = 'fpop';
+  pop.innerHTML = '<input type="text" id="fpop-q" placeholder="Buscar">'
+    + '<label style="font-weight:600;border-bottom:1px solid var(--line);margin-bottom:.2rem"><input type="checkbox" id="fpop-all"' + (sel.size === vals.length ? ' checked' : '') + '>(Seleccionar todo)</label>'
+    + '<div class="flist">' + vals.map(v => '<label data-v="' + esc(fold(v)) + '"><input type="checkbox" class="fpop-chk" value="' + esc(v) + '"' + (sel.has(v) ? ' checked' : '') + '>' + esc(v) + '</label>').join('') + '</div>'
+    + '<div class="row" style="margin-top:.5rem"><button class="btn-primary btn-sm" id="fpop-ok" style="flex:1;justify-content:center">Aplicar</button><button class="btn-sm" id="fpop-clr" style="flex:1">Limpiar</button></div>';
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+  pop.style.top = (window.scrollY + r.bottom + 4) + 'px';
+  pop.style.left = (window.scrollX + Math.max(8, Math.min(r.left, vw - 310))) + 'px';
+  const visibles = () => [...pop.querySelectorAll('.flist label')].filter(l => l.style.display !== 'none');
+  pop.querySelector('#fpop-q').addEventListener('input', e => { const q = fold(e.target.value); pop.querySelectorAll('.flist label').forEach(l => { l.style.display = (!q || l.dataset.v.includes(q)) ? '' : 'none'; }); });
+  pop.querySelector('#fpop-all').addEventListener('change', e => visibles().forEach(l => { l.querySelector('input').checked = e.target.checked; }));
+  pop.querySelector('#fpop-ok').addEventListener('click', () => {
+    const chk = [...pop.querySelectorAll('.fpop-chk')].filter(c => c.checked).map(c => c.value);
+    if (chk.length === vals.length) delete SP.colf[colId]; else SP.colf[colId] = chk;
+    spFiltroCerrar(); spRender();
+  });
+  pop.querySelector('#fpop-clr').addEventListener('click', () => { delete SP.colf[colId]; spFiltroCerrar(); spRender(); });
+  pop.querySelector('#fpop-q').focus();
+  setTimeout(() => document.addEventListener('mousedown', spFiltroFuera, true), 0);
+}
+
+// ---- Ancho de columnas: se ajusta a mano tirando del borde derecho del título; queda guardado en este navegador ----
+function spColAnchos(table){
+  if (!table) return;
+  const ths = [...table.querySelectorAll('thead th')];
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(SP_COLW_KEY) || 'null'); } catch(e) {}
+  if (saved && saved.length === ths.length) { table.classList.add('fixed'); ths.forEach((th,i) => { th.style.width = saved[i] + 'px'; }); }
+  ths.forEach(th => {
+    const rs = th.querySelector('.col-rs'); if (!rs) return;
+    rs.addEventListener('mousedown', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (!table.classList.contains('fixed')) { ths.forEach(t => { t.style.width = t.getBoundingClientRect().width + 'px'; }); table.classList.add('fixed'); }
+      const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
+      rs.classList.add('on'); document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+      const mover = ev => { th.style.width = Math.max(40, w0 + ev.clientX - x0) + 'px'; };
+      const soltar = () => {
+        document.removeEventListener('mousemove', mover); document.removeEventListener('mouseup', soltar);
+        rs.classList.remove('on'); document.body.style.cursor = ''; document.body.style.userSelect = '';
+        try { localStorage.setItem(SP_COLW_KEY, JSON.stringify(ths.map(t => Math.round(t.getBoundingClientRect().width)))); } catch(e) {}
+      };
+      document.addEventListener('mousemove', mover); document.addEventListener('mouseup', soltar);
+    });
+  });
 }
 
 async function spVerPdf(id){
