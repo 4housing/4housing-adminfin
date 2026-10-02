@@ -1214,6 +1214,7 @@ const CUY_PLAN_DEF = {
   'DIF_CAMBIO_NEG':         { codigo:'58000002', nombre:'Diferencia de c° negativa' },
   'MONEDA:ARS':             { codigo:'PES' },
   'MONEDA:USD':             { codigo:'DOL' },
+  'CONFIG:COT_DIA':         { codigo:'anterior' },
 };
 function cuyPlan(k){
   const d = CUY_PLAN_DEF[k] || {}, p = CUY.plan[k] || {}, out = Object.assign({}, d);
@@ -1248,9 +1249,12 @@ async function cuyCargarCot(){
   } catch (e) { CUY.cots = []; CUY.cierres = {}; CUY.cotErr = e.message || String(e); }
 }
 // { v, fecha } de la cotización vigente para esa fecha (la del día o la última anterior), o null
+// Criterio (Plan de cuentas, clave CONFIG:COT_DIA): 'anterior' = la del último día hábil ANTERIOR a la fecha
+// (cierre del día anterior, propuesto para UY y AR — a confirmar con los contadores); 'mismo' = la del día o la última anterior.
+const cuyCotModo = () => cuyPlan('CONFIG:COT_DIA').codigo === 'mismo' ? 'mismo' : 'anterior';
 function cuyCotDe(fecha, campo){
-  let best = null;
-  for (const c of CUY.cots) { if (String(c.fecha) > String(fecha || '')) break; if (cuyNum(c[campo]) != null) best = c; }
+  let best = null; const f = String(fecha || ''), ant = cuyCotModo() === 'anterior';
+  for (const c of CUY.cots) { const cf = String(c.fecha); if (ant ? cf >= f : cf > f) break; if (cuyNum(c[campo]) != null) best = c; }
   return best ? { v: +best[campo], fecha: best.fecha } : null;
 }
 // Convierte un importe entre monedas con las cotizaciones de esa fecha. de: USD|UYU · a: USD|ARS. null si falta cotización.
@@ -1695,7 +1699,8 @@ async function cuyEfectivoAuto(r){
 function cuyFechaXls(v){
   if (v == null || v === '') return null;
   if (typeof v === 'number') { const d = XLSX.SSF.parse_date_code(v); return d ? d.y + '-' + String(d.m).padStart(2,'0') + '-' + String(d.d).padStart(2,'0') : null; }
-  const t = String(v).trim(); let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (m) return m[3] + '-' + m[2].padStart(2,'0') + '-' + m[1].padStart(2,'0');
+  const t = String(v).trim(); let m = t.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4}|\d{2})\b/);
+  if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3], mo = +m[2], d = +m[1]; if (mo < 1 || mo > 12 || d < 1 || d > 31) return null; return y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0'); }
   m = t.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[0] : null;
 }
 function cuyNumXls(v){ if (typeof v === 'number') return v; const t = String(v == null ? '' : v).trim().replace(/\s/g,''); if (!t) return null;
@@ -1981,14 +1986,16 @@ async function cuyCotGuardar(fecha, cambios){
 }
 function cuyRenderCot(){
   const ta = document.getElementById('topActions');
-  ta.innerHTML = SP.editar && !CUY.cotErr ? '<button class="btn ghost" id="ct-api">Traer UYU/USD de hoy (dolarapi)</button><button class="btn ghost" id="ct-camb">Completar UYU/USD con los cambios del banco</button><button class="btn ghost" id="ct-tc">Completar TC de facturas USD</button>' : '';
+  ta.innerHTML = SP.editar && !CUY.cotErr ? '<button class="btn" id="ct-imp">' + ICO.upload + 'Importar cotizaciones</button><button class="btn ghost" id="ct-api">Traer UYU/USD de hoy (dolarapi)</button><button class="btn ghost" id="ct-camb">Completar UYU/USD con los cambios del banco</button><button class="btn ghost" id="ct-tc">Completar TC de facturas USD</button>' : '';
   if (CUY.cotErr) { $main.innerHTML = cuyTabs() + '<div class="card"><div class="empty">No pude leer las cotizaciones: ' + esc(CUY.cotErr) + '<br><span class="muted">Falta correr sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql en Supabase.</span></div></div>'; cuyTabsEventos(); return; }
   // Una fila por fecha cargada o usada por una factura / movimiento
   const usos = {}; CUY.lista.forEach(r => { if (r.fecha) usos[r.fecha] = (usos[r.fecha] || 0) + 1; }); CUY.movs.forEach(m => { if (m.tipo !== 'saldo_inicial') usos[m.fecha] = (usos[m.fecha] || 0) + 1; });
   const fechas = [...new Set(Object.keys(usos).concat(CUY.cots.map(c => c.fecha)))].sort().reverse();
   const filas = fechas.map(f => ({ fecha: f, c: CUY.cots.find(x => x.fecha === f) || {}, usos: usos[f] || 0 }));
   const est = x => { const a = cuyCotDe(x.fecha, 'ars_usd'), u = cuyCotDe(x.fecha, 'uyu_usd');
-    if (!a || !u) return 'Falta'; return (a.fecha === x.fecha && u.fecha === x.fecha) ? 'Cargada' : 'Usa la de un día anterior'; };
+    return (!a && !u) ? 'Falta' : !a ? 'Falta ARS/USD' : !u ? 'Falta UYU/USD' : 'Con cotización'; };
+  const usa = x => { const a = cuyCotDe(x.fecha, 'ars_usd'), u = cuyCotDe(x.fecha, 'uyu_usd');
+    return (a || u) ? '<div class="muted">usa ' + (a ? 'ARS ' + fmtFecha(a.fecha) : '') + (a && u ? ' · ' : '') + (u ? 'UYU ' + fmtFecha(u.fecha) : '') + '</div>' : ''; };
   const inp = (x, campo) => SP.editar ? '<input class="tc-in" type="number" step="0.0001" min="0" data-cot="' + esc(x.fecha) + '|' + campo + '" value="' + esc(x.c[campo] == null ? '' : x.c[campo]) + '" placeholder="' + (cuyCotDe(x.fecha, campo) ? fmtTC(cuyCotDe(x.fecha, campo).v) : '—') + '">' : (x.c[campo] == null ? '—' : fmtTC(x.c[campo]));
   const cols = [
     { id:'fecha', t:'Fecha', fecha:x => x.fecha, td:x => '<b>' + fmtFecha(x.fecha) + '</b>' },
@@ -1996,18 +2003,24 @@ function cuyRenderCot(){
     { id:'uyu', t:'UYU por USD', cls:'num', td:x => inp(x, 'uyu_usd') + (x.c.fuente_uyu ? '<div class="muted">' + esc(x.c.fuente_uyu) + '</div>' : '') },
     { id:'cruce', t:'ARS por UYU', cls:'num', td:x => { const a = cuyCotDe(x.fecha, 'ars_usd'), u = cuyCotDe(x.fecha, 'uyu_usd'); return a && u ? fmtTC(a.v / u.v) : '—'; } },
     { id:'usos', t:'Facturas / movimientos', s:x => x.usos, cls:'num', td:x => x.usos || '<span class="muted">—</span>' },
-    { id:'est', t:'Estado', v:est, td:x => { const e = est(x); return '<span class="badge ' + (e === 'Cargada' ? 'b-verde' : e === 'Falta' ? 'b-rojo' : 'b-gris') + '">' + esc(e) + '</span>'; } },
+    { id:'est', t:'Estado', v:est, td:x => { const e = est(x); return '<span class="badge ' + (e === 'Con cotización' ? 'b-verde' : 'b-rojo') + '">' + esc(e) + '</span>' + usa(x); } },
   ];
   TABLAS.cot = { cols, base: () => filas };
   const f = tablaFiltrar('cot', cols, filas, x => x.fecha + ' ' + fmtFecha(x.fecha));
-  const faltan = filas.filter(x => x.usos && est(x) === 'Falta').length;
+  const faltan = filas.filter(x => x.usos && est(x) !== 'Con cotización').length;
   $main.innerHTML = cuyTabs()
     + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango: USD → DOL con la cotización <b>ARS/USD (BNA divisa)</b>; UYU → PES, pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
-    + 'Si una fecha no tiene cotización se usa la del último día anterior cargado. BNA divisa: cargala a mano desde <a class="lnk" href="https://www.bna.com.ar/Personas" target="_blank" rel="noopener">bna.com.ar</a> (cotización divisas, vendedor). '
+    + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.gub.uy/direccion-general-impositiva/datos-y-estadisticas/datos/cotizaciones-interbancarias" target="_blank" rel="noopener">cotizaciones interbancarias de la DGI</a> y subilo con "Importar cotizaciones". '
+    + 'ARS/USD (BNA divisa): a mano desde <a class="lnk" href="https://www.bna.com.ar/Personas" target="_blank" rel="noopener">bna.com.ar</a>, o importando un Excel con fecha y valor. '
     + (faltan ? '<b class="warn">' + faltan + ' fecha(s) con facturas o movimientos sin cotización.</b>' : '') + '</div>'
     + '<div class="card">' + cardH('Cotizaciones por día', 'Una fila por fecha con facturas o movimientos. Se guarda al salir de la casilla (o con Enter). En gris dentro de la casilla: la cotización que se está usando.')
-    + (SP.editar ? '<div class="tools" style="padding-bottom:0"><input type="date" id="ct-nf" class="tc-in" style="width:140px;text-align:left"><button class="btn ghost sm" id="ct-add">Agregar fecha</button></div>' : '')
-    + tablaHerramientas('cot', 'Buscar fecha…') + tablaHtml('cot', cols, f, '', x => (x.usos && est(x) === 'Falta') ? 'revisar' : '') + '</div>';
+    + '<div class="tools" style="padding-bottom:0">'
+    +   (SP.editar ? '<input type="date" id="ct-nf" class="tc-in" style="width:140px;text-align:left"><button class="btn ghost sm" id="ct-add">Agregar fecha</button>' : '')
+    +   '<span style="margin-left:auto;font-size:12px;color:var(--muted)">Cotización para cada movimiento:</span>'
+    +   '<select id="ct-modo" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
+    +     '<option value="anterior"' + (cuyCotModo() === 'anterior' ? ' selected' : '') + '>la del día hábil anterior (cierre)</option>'
+    +     '<option value="mismo"' + (cuyCotModo() === 'mismo' ? ' selected' : '') + '>la del mismo día</option></select></div>'
+    + tablaHerramientas('cot', 'Buscar fecha…') + tablaHtml('cot', cols, f, '', x => (x.usos && est(x) !== 'Con cotización') ? 'revisar' : '') + '</div>';
   tablaEventos(); cuyTabsEventos();
   $main.querySelectorAll('[data-cot]').forEach(i => {
     i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
@@ -2021,7 +2034,82 @@ function cuyRenderCot(){
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
   on('ct-add', async () => { const f = document.getElementById('ct-nf').value; if (!f) { toast('Elegí la fecha'); return; }
     try { await cuyCotGuardar(f, {}); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
-  on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas);
+  on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas); on('ct-imp', cuyCotImportar);
+  const md = document.getElementById('ct-modo');
+  if (md) md.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:COT_DIA', { codigo: md.value, nombre: 'Cotización: día anterior / mismo día' }); toast('Criterio guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
+}
+// Importa una serie diaria desde Excel / CSV (DGI interbancarias, BNA u otra): detecta la columna de fechas y deja
+// elegir la columna del valor y a qué cotización va. El formato del archivo de la DGI no se pudo ver desde el desarrollo:
+// por eso no se asume ninguna columna fija — se elige mirando los encabezados y la vista previa.
+function cuyCotImportar(){
+  if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+  abrirModal('Importar cotizaciones',
+    '<p style="margin:0 0 10px;font-size:12.5px;color:#5f5c52;line-height:1.5">Subí el Excel o CSV con una fila por día (ej. el de cotizaciones interbancarias de la DGI). Elegí la columna con el valor y a qué cotización corresponde. Se guarda por fecha; no se pisan las cargadas a mano salvo que lo tildes.</p>'
+    + '<div class="field"><label>Archivo</label><input type="file" id="ci-file" accept=".xlsx,.xls,.csv,.ods"></div><div id="ci-cfg"></div><div class="err" id="ci-err"></div>',
+    '<button class="btn ghost" id="ci-no">Cancelar</button><button class="btn" id="ci-ok" disabled>Importar</button>', 'wide');
+  let hojas = [], nombre = '';
+  const $ = i => document.getElementById(i);
+  $('ci-no').addEventListener('click', cerrarModal);
+  const leer = (ws) => {
+    const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:null }), ncol = Math.max(0, ...rows.map(r => (r || []).length));
+    // columna de fechas = la que más celdas con fecha tiene
+    let fc = -1, best = 0;
+    for (let c = 0; c < ncol; c++) { const n = rows.filter(r => r && cuyFechaXls(r[c])).length; if (n > best) { best = n; fc = c; } }
+    if (fc < 0 || best < 2) return null;
+    const datos = rows.filter(r => r && cuyFechaXls(r[fc])), i0 = rows.indexOf(datos[0]);
+    const cols = [];
+    for (let c = 0; c < ncol; c++) { if (c === fc) continue;
+      const nums = datos.filter(r => { const v = cuyNumXls(r[c]); return v != null && v > 0; }).length; if (nums < datos.length * 0.5) continue;
+      let tit = ''; for (let k = i0 - 1; k >= 0 && k >= i0 - 6; k--) { const t = rows[k] && rows[k][c]; if (t != null && String(t).trim() && cuyNumXls(t) == null) { tit = String(t).trim() + (tit ? ' · ' + tit : ''); } }
+      cols.push({ c, tit: tit || 'Columna ' + XLSX.utils.encode_col(c), ej: cuyNumXls(datos[datos.length - 1][c]) }); }
+    return { fc, datos, cols };
+  };
+  $('ci-file').addEventListener('change', async e => {
+    const f = e.target.files[0]; $('ci-err').textContent = ''; hojas = []; $('ci-ok').disabled = true; if (!f) return; nombre = f.name;
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { type:'array' });
+      wb.SheetNames.forEach(n => { const h = leer(wb.Sheets[n]); if (h && h.cols.length) hojas.push(Object.assign({ n }, h)); });
+      if (!hojas.length) { $('ci-err').textContent = 'No encontré una columna de fechas con valores numéricos al lado.'; return; }
+      const pinta = () => {
+        const h = hojas[+$('ci-hoja').value || 0], col = h.cols.find(x => x.c === +$('ci-col').value) || h.cols[0];
+        const prev = h.datos.slice(-6).map(r => '<tr><td>' + fmtFecha(cuyFechaXls(r[h.fc])) + '</td><td class="num">' + esc(cuyNumXls(r[col.c]) == null ? '—' : fmtTC(cuyNumXls(r[col.c]))) + '</td></tr>').join('');
+        const fs = h.datos.map(r => cuyFechaXls(r[h.fc])).sort();
+        $('ci-prev').innerHTML = h.datos.length + ' filas · ' + fmtFecha(fs[0]) + ' a ' + fmtFecha(fs[fs.length - 1]) + '<table class="grid" style="margin-top:6px"><thead><tr><th>Fecha</th><th>Valor</th></tr></thead><tbody>' + prev + '</tbody></table>';
+      };
+      const selCols = h => h.cols.map(x => '<option value="' + x.c + '">' + esc(x.tit) + ' (ej. ' + esc(x.ej == null ? '—' : fmtTC(x.ej)) + ')</option>').join('');
+      $('ci-cfg').innerHTML = '<div class="frow c2">'
+        + '<div class="field"><label>Hoja</label><select id="ci-hoja">' + hojas.map((h, i) => '<option value="' + i + '">' + esc(h.n) + '</option>').join('') + '</select></div>'
+        + '<div class="field"><label>Columna del valor</label><select id="ci-col">' + selCols(hojas[0]) + '</select></div></div>'
+        + '<div class="frow c3" style="margin-top:10px"><div class="field"><label>Es la cotización</label><select id="ci-dest"><option value="uyu_usd">UYU por USD</option><option value="ars_usd">ARS por USD</option></select></div>'
+        + '<div class="field"><label>Fuente (queda anotada)</label><input id="ci-fte" value="' + esc(/dgi|interbanc/i.test(nombre) ? 'DGI interbancario' : nombre) + '"></div>'
+        + '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--ink)"><input type="checkbox" id="ci-pisar" style="width:auto"> Pisar las cargadas a mano</label></div></div>'
+        + '<div class="box" id="ci-prev"></div>'
+        + '<div class="muted" style="margin-top:8px">Revisá en la vista previa que la columna sea la que querés (comprador / vendedor, billete / fondo). Las fechas son las del archivo; el criterio "día hábil anterior" se aplica después, al usar la cotización.</div>';
+      $('ci-hoja').addEventListener('change', () => { $('ci-col').innerHTML = selCols(hojas[+$('ci-hoja').value]); pinta(); });
+      $('ci-col').addEventListener('change', pinta);
+      $('ci-dest').addEventListener('change', () => { if (!$('ci-fte').dataset.tocado) $('ci-fte').value = $('ci-dest').value === 'ars_usd' ? 'BNA divisa' : (/dgi|interbanc/i.test(nombre) ? 'DGI interbancario' : nombre); });
+      $('ci-fte').addEventListener('input', () => { $('ci-fte').dataset.tocado = '1'; });
+      pinta(); $('ci-ok').disabled = false;
+    } catch (ex) { $('ci-err').textContent = 'No pude leer el archivo: ' + (ex.message || ex); }
+  });
+  $('ci-ok').addEventListener('click', async () => {
+    const h = hojas[+$('ci-hoja').value || 0], c = +$('ci-col').value, campo = $('ci-dest').value, fcampo = campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu';
+    const fte = $('ci-fte').value.trim() || 'archivo', pisar = $('ci-pisar').checked;
+    const por = {}; h.datos.forEach(r => { const f = cuyFechaXls(r[h.fc]), v = cuyNumXls(r[c]); if (f && v > 0) por[f] = v; });
+    let manual = 0; const filas = Object.entries(por).filter(([f]) => { const x = CUY.cots.find(k => k.fecha === f); if (x && x[fcampo] === 'manual' && cuyNum(x[campo]) != null && !pisar) { manual++; return false; } return true; })
+      .map(([fecha, v]) => ({ fecha, [campo]: v, [fcampo]: fte }));
+    if (!filas.length) { $('ci-err').textContent = 'No hay nada para importar' + (manual ? ' (' + manual + ' fechas ya cargadas a mano)' : '') + '.'; return; }
+    $('ci-ok').disabled = true;
+    try {
+      for (let i = 0; i < filas.length; i += 500) {
+        const { data, error } = await sb.from(CUY_COT_T).upsert(filas.slice(i, i + 500), { onConflict:'fecha' }).select();
+        if (error) throw error; if (!data || !data.length) throw new Error('sin permiso de edición.');
+        data.forEach(d => { const k = CUY.cots.findIndex(x => x.fecha === d.fecha); if (k >= 0) CUY.cots[k] = d; else CUY.cots.push(d); });
+      }
+      CUY.cots.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)));
+      cerrarModal(); toast(filas.length + ' cotizaciones importadas' + (manual ? ' · ' + manual + ' cargadas a mano no se tocaron' : '')); cuyRender();
+    } catch (ex) { $('ci-err').textContent = 'Error: ' + (ex.message || ex); $('ci-ok').disabled = false; }
+  });
 }
 // dolarapi (Uruguay): solo trae la cotización de HOY, no el histórico. Endpoint no verificado desde el desarrollo:
 // si falla o cambia el formato, se avisa y se carga a mano.
@@ -2089,7 +2177,7 @@ function cuyPlanClaves(){
   CUY_CTAS.forEach(c => add('CUENTA:' + c.n, 'Banco / caja', c.n + ' (' + c.mon + ')', CUY.movs.filter(m => m.cuenta === c.n).length));
   CUY.lista.forEach(r => add(cuyClaveRubro(r.rubro), 'Gasto por rubro (facturas)', r.rubro || '(sin rubro)', 1, true));
   CUY.movs.filter(m => m.tipo !== 'saldo_inicial').forEach(m => { const c = cuyContraMov(m); if (c !== 'PROVEEDORES') add(c, 'Gasto / contrapartida', c.slice(7), 1, true); });
-  Object.keys(CUY.plan).forEach(c => { if (!k.has(c)) add(c, 'Otras (guardadas)', c); });
+  Object.keys(CUY.plan).forEach(c => { if (!k.has(c) && !c.startsWith('CONFIG:')) add(c, 'Otras (guardadas)', c); });
   return [...k.values()];
 }
 function cuyRenderPlan(){
