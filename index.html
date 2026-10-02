@@ -292,6 +292,7 @@ function cuando(h){
   const d = h && h.fecha ? new Date(h.fecha) : null;
   return esc((h && h.autor) || '') + ' · ' + (d && !isNaN(d) ? d.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}) + ' ' + d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',hour12:false}) : '');
 }
+function fechaPago(s){ return s.fecha_pago || s.fecha_pago_estimada || ''; }
 // Columna "Pago": pagada / fecha estimada / fuera del informe
 function pagoTxt(s){
   if (s.estado === 'Pagada') return 'Pagada' + (s.fecha_pago ? ' ' + fmtFecha(s.fecha_pago) : '');
@@ -388,7 +389,7 @@ function tablaFiltrarSinOrden(ns, cols, rows, texto){
   const q = fold(SP.q[ns] || ''), cf = SP.colf[ns] || {}, fr = SP.fecha[ns] || {};
   return rows.filter(r => (!q || fold(texto(r)).includes(q))
     && cols.every(c => {
-      if (c.fecha && fr[c.id]) { const d = c.fecha(r) || ''; if (fr[c.id].desde && d < fr[c.id].desde) return false; if (fr[c.id].hasta && d > fr[c.id].hasta) return false; }
+      if (c.fecha && fr[c.id]) { const d = c.fecha(r) || ''; if (!d) return false; if (fr[c.id].desde && d < fr[c.id].desde) return false; if (fr[c.id].hasta && d > fr[c.id].hasta) return false; }
       return !c.v || !cf[c.id] || cf[c.id].includes(c.v(r));
     }));
 }
@@ -573,15 +574,23 @@ function vistaSolicitudes(){
     { id:'est', t:'Estado', v:s => (s.estado || 'Pendiente') + (s.leido_en ? ' · leída' : ''), td:s => badge(s.estado || 'Pendiente') + (s.leido_en ? '<div class="muted">✓ leída por Adm.</div>' : '') },
     { id:'pago', t:'Pago', v:s => s.estado === 'Pagada' ? 'Pagada' : (s.salio_informe_en ? 'Fuera del informe' : (s.fecha_pago_estimada ? 'Con fecha estimada' : 'Sin fecha')),
       s:s => s.fecha_pago || s.fecha_pago_estimada || '', td:s => '<span style="white-space:nowrap">' + pagoTxt(s) + '</span>' },
+    // Fecha de pago: la real si está Pagada, si no la estimada. Con el ▾ se filtra por rango
+    // (para un día: Desde = Hasta; "hasta tal fecha": solo Hasta) → pagos comprometidos.
+    { id:'fpago', t:'Fecha de pago', fecha:fechaPago, td:s => { const f = fechaPago(s); return f ? '<span style="white-space:nowrap">' + fmtFecha(f) + '</span><div class="muted">' + (s.fecha_pago ? 'pagada' : 'estimada') + '</div>' : '<span class="muted">—</span>'; } },
     { id:'ult', t:'Último comentario', v:null, s:s => { const h = s.historial || []; return h.length ? String(h[h.length-1].fecha || '') : ''; },
       td:s => { const h = s.historial || []; const u = h.length ? h[h.length-1] : null; return u ? esc(u.texto || '') + '<div class="muted">' + cuando(u) + '</div>' : '—'; } },
     { id:'acc', t:'', v:null, td:s => '<button class="btn ghost sm" data-abrir="' + s.id + '">Abrir</button>' },
   ];
   TABLAS.solicitudes = { cols, base:() => base };
   const filas = tablaFiltrar('solicitudes', cols, base, s => [s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' '));
+  // Total de lo que se ve (respeta estado, búsqueda y filtros), separado por moneda
+  const tot = { ARS:0, USD:0 }; filas.forEach(x => { tot[x.moneda === 'USD' ? 'USD' : 'ARS'] += (+x.monto || 0); });
+  const iMon = cols.findIndex(c => c.id === 'mon');
+  const pie = '<tfoot><tr><td colspan="' + iMon + '" class="num"><b>Total (' + filas.length + (filas.length !== base.length ? ' de ' + base.length : '') + ')</b></td>'
+    + '<td class="num"><b>' + fmtMonto(tot.ARS, 'ARS') + '</b>' + (tot.USD ? '<div><b>' + fmtMonto(tot.USD, 'USD') + '</b></div>' : '') + '</td><td colspan="' + (cols.length - iMon - 1) + '"></td></tr></tfoot>';
   return cardH('Pagos solicitados', 'Pedidos de pago, con fecha y responsable. Lo que confirmes o comentes acá, Compras lo ve al instante.')
     + '<div class="chips">' + chips + '</div>' + tablaHerramientas('solicitudes', 'Buscar factura, proveedor, OC, auxiliar, comprador…')
-    + (filas.length ? tablaHtml('solicitudes', cols, filas) : '<div class="empty">No hay solicitudes' + (tablaHayFiltros('solicitudes') || SP.q.solicitudes ? ' que coincidan con los filtros' : (SP.filtro!=='todas' ? ' en este estado' : '')) + '.</div>');
+    + (filas.length ? tablaHtml('solicitudes', cols, filas, pie) : '<div class="empty">No hay solicitudes' + (tablaHayFiltros('solicitudes') || SP.q.solicitudes ? ' que coincidan con los filtros' : (SP.filtro!=='todas' ? ' en este estado' : '')) + '.</div>');
 }
 
 /* ---------- Pestaña: Pagos a realizar ---------- */
@@ -649,7 +658,9 @@ function spDetalle(id){
   } else if (!SP.editar) {
     acciones = '';
   } else if (est === 'Pagada') {
-    acciones = boxCom;
+    // Deshacer Pagada (no se pudo pagar, se marcó por error): vuelve a En gestión con motivo
+    acciones = '<div class="box"><h4>Volver a En gestión</h4><div class="muted" style="font-size:12px">Si al final no se pudo pagar o se marcó por error. Se borra la fecha de pago y queda en el historial.</div>'
+      + '<div class="field"><label>Motivo *</label><input type="text" id="ac-reab-msg" placeholder="Ej. rebotó la transferencia"></div><div class="row"><button class="btn ghost sm" id="ac-reab-ok">Volver a En gestión</button></div></div>' + boxCom;
   } else if (est === 'Cancelada') {
     acciones = '<div class="box"><div class="muted" style="font-size:12px">Compras canceló este pedido de pago (eso no quiere decir que no se haya pagado).</div></div>' + boxPagada + boxCom;
   } else {
@@ -684,6 +695,11 @@ function spDetalle(id){
     if (!f) { document.getElementById('ac-err').textContent = 'Poné la fecha de pago.'; return; }
     spAccion(s.id, 'pagada', f, document.getElementById('ac-pag-msg').value);
   });
+  const bra = document.getElementById('ac-reab-ok'); if (bra) bra.addEventListener('click', () => {
+    const t = document.getElementById('ac-reab-msg').value.trim();
+    if (!t) { document.getElementById('ac-err').textContent = 'Escribí el motivo.'; return; }
+    spAccion(s.id, 'reabrir', null, t);
+  });
   const bf = document.getElementById('ac-fecha-ok'); if (bf) bf.addEventListener('click', () => {
     const f = document.getElementById('ac-fecha').value;
     if (!f) { document.getElementById('ac-err').textContent = 'Elegí la fecha.'; return; }
@@ -701,7 +717,7 @@ async function spAccion(id, accion, fecha, texto){
   if (error) { if (err) err.textContent = 'Error: ' + error.message; return; }
   const i = SP.lista.findIndex(x => String(x.id) === String(id));
   if (i >= 0 && data) SP.lista[i] = data;
-  toast({ leido:'Pasó a En gestión', pagada:'Marcada como Pagada', fecha_pago:'Fecha estimada informada', comentario:'Mensaje enviado' }[accion] || 'Listo');
+  toast({ leido:'Pasó a En gestión', pagada:'Marcada como Pagada', reabrir:'Volvió a En gestión', fecha_pago:'Fecha estimada informada', comentario:'Mensaje enviado' }[accion] || 'Listo');
   spRender(); spDetalle(id);
 }
 
