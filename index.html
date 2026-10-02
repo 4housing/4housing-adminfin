@@ -6,6 +6,7 @@
 <title>Administración y Finanzas · 4housing</title>
 <meta name="theme-color" content="#5f7a4e">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#f5f4f1; --paper:#ffffff; --ink:#20262e; --ink-soft:#5b646e; --ink-faint:#8b939c;
@@ -45,6 +46,49 @@
   .notice{background:var(--warn-soft);border:1px solid var(--warn);border-radius:8px;padding:1rem 1.2rem;font-size:.9rem;max-width:560px;margin:6vh auto 0;}
   .notice code{font-family:var(--mono);font-size:.83em;}
   .msg{color:var(--ink-soft);font-size:.9rem;padding:2rem 0;text-align:center;}
+
+  /* ---- Solicitudes de pago (espejo de la app de Compras) ---- */
+  body.app .wrap{max-width:1280px;}
+  .panel{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:1.1rem 1.2rem;}
+  .panel-h{display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:.9rem;}
+  .panel-h h2{font-size:1.1rem;}
+  .panel-h .sub{color:var(--ink-soft);font-size:.82rem;flex:1;min-width:240px;}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem;}
+  .chip{font-size:.8rem;padding:.3rem .75rem;border-radius:999px;}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .tools{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-bottom:.8rem;}
+  input[type=search],input[type=date],input[type=text],textarea{font:inherit;font-size:.88rem;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:.45rem .6rem;}
+  input[type=search]{flex:1;min-width:220px;max-width:420px;}
+  textarea{width:100%;resize:vertical;}
+  .tbl-wrap{overflow-x:auto;}
+  table.tbl{width:100%;border-collapse:collapse;font-size:.83rem;}
+  table.tbl th{text-align:left;font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:.5rem .6rem;border-bottom:1px solid var(--line);white-space:nowrap;}
+  table.tbl td{padding:.55rem .6rem;border-bottom:1px solid var(--line);vertical-align:top;}
+  table.tbl td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .muted{color:var(--ink-faint);font-size:.75rem;}
+  .badge{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:999px;white-space:nowrap;}
+  .b-pend{background:var(--warn-soft);color:var(--warn);}
+  .b-gest{background:var(--accent-soft);color:var(--accent-ink);}
+  .b-pag{background:color-mix(in srgb, var(--ok) 15%, transparent);color:var(--ok);}
+  .btn-sm{font-size:.8rem;padding:.3rem .7rem;}
+  a.lnk{color:var(--accent);text-decoration:none;}
+  a.lnk:hover{text-decoration:underline;}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:flex-start;justify-content:center;padding:6vh 16px;z-index:50;overflow:auto;}
+  .modal-bg.open{display:flex;}
+  .modal{background:var(--paper);border:1px solid var(--line);border-radius:10px;width:100%;max-width:640px;padding:1.2rem 1.3rem;}
+  .modal h3{font-size:1.05rem;margin-bottom:.8rem;}
+  .kv{font-size:.86rem;line-height:1.75;}
+  .kv b{font-weight:600;}
+  .box{border:1px solid var(--line);border-radius:8px;padding:.8rem;margin-top:.9rem;}
+  .box h4{font-size:.85rem;margin-bottom:.5rem;}
+  .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.4rem;}
+  .hist{max-height:220px;overflow:auto;}
+  .hist div.it{border-bottom:1px solid var(--line);padding:.45rem 0;font-size:.84rem;}
+  .foot{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1rem;}
+  .err{color:#b3261e;font-size:.82rem;min-height:1.1em;margin-top:.4rem;}
+  .okmsg{color:var(--ok);font-size:.82rem;}
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:.6rem 1rem;border-radius:8px;font-size:.88rem;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;}
+  #toast.show{opacity:1;}
 </style>
 </head>
 <body>
@@ -55,6 +99,8 @@
   </header>
   <main id="main"><p class="msg">Cargando…</p></main>
 </div>
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+<div id="toast"></div>
 
 <script src="/portal/nav.js" defer></script>
 <script>
@@ -120,14 +166,219 @@ function vistaSinSector(perfil){
 
 function vistaApp(perfil, cargo){
   $hdr.hidden = false;
+  document.body.classList.add('app');
   document.getElementById('who-nombre').innerHTML =
     '<b>' + esc(perfil.nombre || perfil.email) + '</b>' + (cargo ? ' · ' + esc(cargo) : '');
-  $main.innerHTML = `
-    <div class="card">
-      <h2>Administración y Finanzas</h2>
-      <p>Esta app todavía no tiene funcionalidad — es el esqueleto de acceso, comparte login y permisos con el resto del portal.</p>
-      <p class="fine">Sector: <code>adminfin</code></p>
-    </div>`;
+  // Mismo criterio que public.puede_editar_sector(): los cargos lector/lectura solo ven.
+  SP.editar = !!perfil.es_direccion || !['lector','lectura'].includes(String(cargo || '').toLowerCase());
+  spCargar();
+}
+
+/* ==========================================================================
+   Solicitudes de pago — espejo de la app de Compras (4housing-compras).
+   Lee la MISMA tabla (compras_solicitudes_pago): no hay copia ni sincronización.
+   Administración solo confirma lectura, informa fecha estimada de pago y comenta,
+   siempre a través de la función compras_solpago_adminfin() (no escribe la tabla directo).
+   Importa "Pagos a realizar" de Tango con compras_pagos_realizar_importar(): reemplaza la
+   foto y pasa a Pagada toda FAC que figuraba en el informe anterior y ya no está.
+   ========================================================================== */
+const SP = { editar:false, lista:[], filtro:'Pendiente', q:'', ultimaImport:null, actual:null };
+const SP_ESTADOS = ['Pendiente','En gestión','Pagada'];
+const SP_BADGE = { 'Pendiente':'b-pend', 'En gestión':'b-gest', 'Pagada':'b-pag' };
+
+function fmtFecha(v){ if(!v) return '—'; const p=String(v).slice(0,10).split('-'); return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : String(v); }
+function fmtMonto(v, mon){ if(v==null || v==='') return '—'; return (mon==='USD'?'US$ ':'$ ') + (+v||0).toLocaleString('es-AR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+// N° de OC de Tango sin punto de venta ni ceros adelante (" 0000100031125" -> "31125"), igual que en Compras.
+function nroOC(v){ const t=String(v==null?'':v).trim(); const m=t.match(/^(\d{5})-?(\d{8})$/); return m ? (m[2].replace(/^0+/,'')||'0') : t; }
+function fold(s){ return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+let _toastT=null;
+function toast(t){ const el=document.getElementById('toast'); el.textContent=t; el.classList.add('show'); clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('show'), 3200); }
+function abrirModal(html){ document.getElementById('modal').innerHTML=html; document.getElementById('modalBg').classList.add('open'); }
+function cerrarModal(){ document.getElementById('modalBg').classList.remove('open'); SP.actual=null; }
+document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') cerrarModal(); });
+
+async function spCargar(){
+  const [{ data, error }, { data: ult }] = await Promise.all([
+    sb.from('compras_solicitudes_pago').select('*').neq('estado','FAC cargada').order('id', { ascending:false }),
+    sb.from('compras_pagos_realizar').select('importado_en, importado_por').order('importado_en', { ascending:false }).limit(1),
+  ]);
+  if (error) {
+    $main.innerHTML = '<div class="notice">No pude leer las solicitudes de pago: ' + esc(error.message)
+      + '<br><span class="muted">Si dice "permission denied", falta correr el SQL de habilitación (sql/2026-10_solpago_informes.sql del repo 4housing-compras).</span></div>';
+    return;
+  }
+  SP.lista = data || [];
+  SP.ultimaImport = (ult && ult[0]) || null;
+  spRender();
+}
+
+function spRender(){
+  const cuenta = e => SP.lista.filter(s => (s.estado||'Pendiente') === e).length;
+  const chips = [['Pendiente','Pendiente ('+cuenta('Pendiente')+')'], ['En gestión','En gestión ('+cuenta('En gestión')+')'],
+                 ['Pagada','Pagada ('+cuenta('Pagada')+')'], ['todas','Todas ('+SP.lista.length+')']]
+    .map(([v,l]) => '<button class="chip'+(SP.filtro===v?' on':'')+'" data-filtro="'+esc(v)+'">'+esc(l)+'</button>').join('');
+  const ult = SP.ultimaImport ? 'Pagos a realizar importado el ' + fmtFecha(String(SP.ultimaImport.importado_en).slice(0,10)) + (SP.ultimaImport.importado_por ? ' por ' + esc(SP.ultimaImport.importado_por) : '') : 'Pagos a realizar todavía no se importó.';
+  $main.innerHTML =
+    '<div class="panel">'
+    + '<div class="panel-h"><h2>Solicitudes de pago</h2>'
+    +   '<div class="sub">Pedidos de Compras para pagar una factura. Es la misma información que ve Compras: lo que confirmes o comentes acá, Compras lo ve al instante. ' + ult + '</div>'
+    +   (SP.editar ? '<button class="btn-primary btn-sm" id="btn-importar">Importar Pagos a realizar</button>' : '')
+    + '</div>'
+    + '<div class="chips">' + chips + '</div>'
+    + '<div class="tools"><input type="search" id="sp-q" placeholder="Buscar factura, proveedor, OC, auxiliar, comprador…" value="' + esc(SP.q) + '"></div>'
+    + '<div class="tbl-wrap" id="sp-tabla"></div>'
+    + '</div>';
+  $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
+  const q = document.getElementById('sp-q');
+  q.addEventListener('input', () => { SP.q = q.value; spTabla(); });
+  const bi = document.getElementById('btn-importar'); if (bi) bi.addEventListener('click', spAbrirImportar);
+  spTabla();
+}
+
+function spTabla(){
+  const q = fold(SP.q);
+  const filas = SP.lista.filter(s => SP.filtro === 'todas' || (s.estado||'Pendiente') === SP.filtro)
+    .filter(s => !q || fold([s.nro_factura, s.proveedor_cod, s.proveedor, nroOC(s.oc_numero), s.proyecto_cod, s.comprador, s.remito_numero].join(' ')).includes(q));
+  const box = document.getElementById('sp-tabla');
+  if (!filas.length) { box.innerHTML = '<p class="msg">No hay solicitudes' + (SP.filtro!=='todas' ? ' en este estado' : '') + '.</p>'; return; }
+  box.innerHTML = '<table class="tbl"><thead><tr><th>Factura</th><th>Proveedor</th><th>OC</th><th>Auxiliar</th><th>Comprador</th><th style="text-align:right">Monto</th><th>Estado</th><th>Pago</th><th>Último comentario</th><th></th></tr></thead><tbody>'
+    + filas.map(s => {
+        const h = s.historial || []; const u = h.length ? h[h.length-1] : null;
+        const est = s.estado || 'Pendiente';
+        const pago = est==='Pagada' && s.fecha_pago ? 'Pagada ' + fmtFecha(s.fecha_pago) : (s.fecha_pago_estimada ? 'Estimada ' + fmtFecha(s.fecha_pago_estimada) : '—');
+        return '<tr>'
+          + '<td><b>' + esc(s.nro_factura || '—') + '</b>' + (s.adjunto_path ? '<div><a href="#" class="lnk" data-pdf="' + s.id + '">ver PDF</a></div>' : '') + '</td>'
+          + '<td><b>' + esc(s.proveedor_cod || '') + '</b><div class="muted">' + esc(s.proveedor || '') + '</div></td>'
+          + '<td>' + esc(nroOC(s.oc_numero) || '—') + '</td>'
+          + '<td>' + esc(s.proyecto_cod || '—') + '</td>'
+          + '<td>' + esc(s.comprador || '') + '</td>'
+          + '<td class="num">' + fmtMonto(s.monto, s.moneda) + '</td>'
+          + '<td><span class="badge ' + (SP_BADGE[est]||'') + '">' + esc(est) + '</span>' + (s.leido_en ? '<div class="muted">✓ leída</div>' : '') + '</td>'
+          + '<td style="white-space:nowrap">' + pago + '</td>'
+          + '<td style="max-width:240px">' + (u ? esc(u.texto || '') + '<div class="muted">' + esc(u.autor || '') + ' · ' + fmtFecha(String(u.fecha||'').slice(0,10)) + '</div>' : '—') + '</td>'
+          + '<td><button class="btn-sm" data-abrir="' + s.id + '">Abrir</button></td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table>';
+  box.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', () => spDetalle(b.dataset.abrir)));
+  box.querySelectorAll('[data-pdf]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); spVerPdf(a.dataset.pdf); }));
+}
+
+async function spVerPdf(id){
+  const s = SP.lista.find(x => String(x.id) === String(id)); if (!s || !s.adjunto_path) return;
+  const w = window.open('', '_blank');   // se abre antes del await para que el navegador no lo bloquee
+  const { data, error } = await sb.storage.from('facturas').createSignedUrl(s.adjunto_path, 3600);
+  if (error || !data) { if (w) w.close(); toast('No pude abrir el PDF: ' + ((error && error.message) || 'sin permiso')); return; }
+  if (w) w.location = data.signedUrl; else window.location = data.signedUrl;
+}
+
+function spDetalle(id){
+  const s = SP.lista.find(x => String(x.id) === String(id)); if (!s) return;
+  SP.actual = s.id;
+  const est = s.estado || 'Pendiente';
+  const hist = (s.historial || []).slice().reverse().map(h =>
+    '<div class="it">' + esc(h.texto || '') + '<div class="muted">' + esc(h.autor || '') + ' · ' + fmtFecha(String(h.fecha||'').slice(0,10)) + '</div></div>').join('') || '<p class="muted">Sin comentarios.</p>';
+  const acciones = (SP.editar && est !== 'Pagada')
+    ? (s.leido_en ? '' : '<div class="box"><h4>Confirmar lectura</h4><div class="muted">Avisa a Compras que la solicitud ya la tomó Finanzas' + (est==='Pendiente' ? ' y la pasa a "En gestión"' : '') + '.</div><div class="row"><button class="btn-primary btn-sm" id="ac-leido">Confirmar lectura</button></div></div>')
+      + '<div class="box"><h4>Fecha estimada de pago</h4><div class="row"><input type="date" id="ac-fecha" value="' + esc(s.fecha_pago_estimada || '') + '"><input type="text" id="ac-fecha-msg" placeholder="Mensaje opcional (ej. sale con el lote del viernes)" style="flex:1;min-width:200px"><button class="btn-sm" id="ac-fecha-ok">Informar</button></div></div>'
+      + '<div class="box"><h4>Dejar un mensaje</h4><textarea id="ac-com" rows="2" placeholder="Mensaje para Compras…"></textarea><div class="row"><button class="btn-sm" id="ac-com-ok">Enviar</button></div></div>'
+    : '';
+  abrirModal(
+    '<h3>Solicitud de pago · ' + esc(s.nro_factura || '') + '</h3>'
+    + '<div class="kv">'
+    + '<b>Proveedor:</b> ' + esc(s.proveedor_cod || '') + ' — ' + esc(s.proveedor || '') + '<br>'
+    + '<b>Factura:</b> ' + esc(s.nro_factura || '—') + (s.adjunto_path ? ' · <a href="#" class="lnk" id="dt-pdf">ver PDF</a>' : '') + '<br>'
+    + '<b>OC:</b> ' + esc(nroOC(s.oc_numero) || '—') + ' &nbsp; <b>Remito:</b> ' + esc(s.remito_numero || '—') + '<br>'
+    + '<b>Auxiliar:</b> ' + esc(s.proyecto_cod || '—') + ' &nbsp; <b>Comprador:</b> ' + esc(s.comprador || '—') + '<br>'
+    + '<b>Monto:</b> ' + fmtMonto(s.monto, s.moneda) + '<br>'
+    + '<b>Estado:</b> <span class="badge ' + (SP_BADGE[est]||'') + '">' + esc(est) + '</span>'
+    + (s.leido_en ? '<br><b>Leída:</b> ' + esc(s.leido_por || '') + ' · ' + fmtFecha(String(s.leido_en).slice(0,10)) : '')
+    + (s.fecha_pago_estimada ? '<br><b>Fecha estimada de pago:</b> ' + fmtFecha(s.fecha_pago_estimada) : '')
+    + (s.fecha_pago ? '<br><b>Pagada:</b> ' + fmtFecha(s.fecha_pago) + ' <span class="muted">(cuando dejó de figurar en Pagos a realizar)</span>' : '')
+    + '</div>'
+    + acciones
+    + '<div class="err" id="ac-err"></div>'
+    + '<div class="box"><h4>Historial</h4><div class="hist">' + hist + '</div></div>'
+    + '<div class="foot"><button id="dt-cerrar">Cerrar</button></div>'
+  );
+  document.getElementById('dt-cerrar').addEventListener('click', cerrarModal);
+  const pdf = document.getElementById('dt-pdf'); if (pdf) pdf.addEventListener('click', e => { e.preventDefault(); spVerPdf(s.id); });
+  const bl = document.getElementById('ac-leido'); if (bl) bl.addEventListener('click', () => spAccion(s.id, 'leido'));
+  const bf = document.getElementById('ac-fecha-ok'); if (bf) bf.addEventListener('click', () => {
+    const f = document.getElementById('ac-fecha').value;
+    if (!f) { document.getElementById('ac-err').textContent = 'Elegí la fecha.'; return; }
+    spAccion(s.id, 'fecha_pago', f, document.getElementById('ac-fecha-msg').value);
+  });
+  const bc = document.getElementById('ac-com-ok'); if (bc) bc.addEventListener('click', () => {
+    const t = document.getElementById('ac-com').value.trim();
+    if (!t) { document.getElementById('ac-err').textContent = 'Escribí el mensaje.'; return; }
+    spAccion(s.id, 'comentario', null, t);
+  });
+}
+
+async function spAccion(id, accion, fecha, texto){
+  const err = document.getElementById('ac-err'); if (err) err.textContent = '';
+  const { data, error } = await sb.rpc('compras_solpago_adminfin', { p_id: +id, p_accion: accion, p_fecha: fecha || null, p_texto: texto || null });
+  if (error) { if (err) err.textContent = 'Error: ' + error.message; return; }
+  const i = SP.lista.findIndex(x => String(x.id) === String(id));
+  if (i >= 0 && data) SP.lista[i] = data;
+  toast(accion === 'leido' ? 'Lectura confirmada' : accion === 'fecha_pago' ? 'Fecha de pago informada' : 'Mensaje enviado');
+  spRender(); spDetalle(id);
+}
+
+// ---- Importar "Pagos a realizar" (Tango → Mis Consultas → Reportes Diarios) ----
+function spAbrirImportar(){
+  abrirModal('<h3>Importar Pagos a realizar</h3>'
+    + '<p class="muted" style="margin-bottom:.8rem">Subí el Excel de Tango "Pagos a realizar". Reemplaza el informe anterior. Toda solicitud cuya factura figuraba en el informe anterior y ya no está pasa a <b>Pagada</b>. Una factura que todavía nunca apareció en el informe no se toca.</p>'
+    + '<input type="file" id="imp-file" accept=".xlsx,.xls">'
+    + '<div class="err" id="imp-err"></div><div class="okmsg" id="imp-ok"></div>'
+    + '<div class="foot"><button id="imp-cerrar">Cerrar</button><button class="btn-primary btn-sm" id="imp-ok-btn">Importar</button></div>');
+  document.getElementById('imp-cerrar').addEventListener('click', cerrarModal);
+  document.getElementById('imp-ok-btn').addEventListener('click', spImportar);
+}
+function _xNorm(s){ return String(s==null?'':s).trim(); }
+function _xIdx(H, ...c){ const h=H.map(x=>fold(_xNorm(x))); for (const n of c){ const i=h.indexOf(fold(n)); if (i>=0) return i; } return -1; }
+function _xNum(v){ if (typeof v==='number') return v; if (v==null || v==='') return null; const n=parseFloat(String(v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?null:n; }
+function _xFecha(v){
+  if (v==null || v==='') return null;
+  if (v instanceof Date) return isNaN(v) ? null : v.toISOString().slice(0,10);
+  if (typeof v==='number' && v>20000 && v<60000) return new Date(Date.UTC(1899,11,30) + v*86400000).toISOString().slice(0,10);   // serie de Excel
+  const m=String(v).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return null;
+}
+async function spImportar(){
+  const f = (document.getElementById('imp-file').files || [])[0];
+  const err = document.getElementById('imp-err'), ok = document.getElementById('imp-ok');
+  err.textContent = ''; ok.textContent = '';
+  if (!f) { err.textContent = 'Elegí el archivo.'; return; }
+  try {
+    ok.textContent = 'Leyendo…';
+    const wb = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type:'array' });
+    let rows = null;
+    for (const name of wb.SheetNames) {
+      const rr = XLSX.utils.sheet_to_json(wb.Sheets[name], { header:1, raw:true, defval:'' });
+      if (rr.length && _xIdx(rr[0],'Nro. Comprobante')>=0 && _xIdx(rr[0],'Total Pendiente (CTE)')>=0) { rows = rr; break; }
+    }
+    if (!rows) throw new Error('No encontré una hoja con las columnas "Nro. Comprobante" y "Total Pendiente (CTE)".');
+    const H = rows[0];
+    const ix = { fe:_xIdx(H,'Fecha de emisión','Fecha de emision'), fc:_xIdx(H,'Fecha contable'), tipo:_xIdx(H,'Tipo de comprobante'),
+      prov:_xIdx(H,'Cód. proveedor','Cod. proveedor'), nro:_xIdx(H,'Nro. Comprobante'), cte:_xIdx(H,'Total Pendiente (CTE)'), ext:_xIdx(H,'Total Pendiente (EXT)') };
+    const g = (r,i) => i>=0 ? r[i] : '';
+    const filas = [];
+    for (let k=1; k<rows.length; k++) {
+      const r = rows[k]; const nro = _xNorm(g(r,ix.nro)); if (!nro) continue;   // la última fila de Tango es el total
+      filas.push({ fecha_emision:_xFecha(g(r,ix.fe)), fecha_contable:_xFecha(g(r,ix.fc)), tipo_comprobante:_xNorm(g(r,ix.tipo)),
+        proveedor_cod:_xNorm(g(r,ix.prov)), comprobante_numero:nro, total_pend_cte:_xNum(g(r,ix.cte)), total_pend_ext:_xNum(g(r,ix.ext)) });
+    }
+    if (!filas.length) throw new Error('No encontré filas de datos.');
+    ok.textContent = 'Guardando ' + filas.length + ' facturas…';
+    const { data, error } = await sb.rpc('compras_pagos_realizar_importar', { p_filas: filas });
+    if (error) throw new Error(error.message);
+    cerrarModal();
+    toast('Pagos a realizar: ' + data.filas + ' facturas · ' + (data.pagadas===1 ? '1 solicitud pasó' : data.pagadas + ' solicitudes pasaron') + ' a Pagada');
+    spCargar();
+  } catch (e) { ok.textContent = ''; err.textContent = 'Error: ' + (e.message || e); }
 }
 
 async function salir(){
