@@ -1,0 +1,4 @@
+# Datos de negocio: nunca al repo (es público)
+*_seed*.sql
+*_seed*.json
+*_seed*.csv

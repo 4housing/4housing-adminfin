@@ -118,6 +118,27 @@ a.lnk:hover{text-decoration:underline;}
 .b-verde{background:#e6f1e3;color:#4f8a53;}
 .b-rojo{background:#f6ebea;color:#b0584f;}
 
+/* ===== KPIs (mismos que Compras) ===== */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:11px;padding:12px 13px;}
+.kpi-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;}
+.kpi-value{font-size:23px;font-weight:700;line-height:1;margin:5px 0 4px;font-variant-numeric:tabular-nums;}
+.kpi-sub{font-size:10.5px;color:var(--muted);line-height:1.35;}
+.kpi .warn{color:#b3853a;}
+@media(max-width:900px){ .kpi-grid{grid-template-columns:repeat(2,1fr);} }
+@media(max-width:560px){ .kpi-grid{grid-template-columns:1fr;} }
+/* Contabilidad UY: filas a revisar (TC pendiente u observaciones) en amarillo */
+table.grid tbody tr.revisar td{background:#fdf6dc;}
+table.grid tbody tr.revisar:hover td{background:#faefc8;}
+table.grid[data-tbl=cuy] td{white-space:nowrap;}
+table.grid[data-tbl=cuy] td.wrap{white-space:normal;min-width:200px;}
+table.grid td input.tc-in{width:92px;border:1px solid var(--line-strong);border-radius:7px;padding:4px 6px;font-size:11px;text-align:right;background:#fff;font-family:inherit;}
+table.grid td input.tc-in.vacio{border-color:#e0ab3f;background:#fffaf0;}
+.row-actions{display:flex;gap:6px;justify-content:flex-end;}
+.iconbtn.del:hover{color:#b4554e;border-color:#e8cfcc;}
+.btn.danger{background:#fff;color:#b4554e;border:1px solid #e8cfcc;}
+.btn.danger:hover{background:#fbf0ef;}
+
 /* ===== FORM ===== */
 .field{margin-bottom:12px;display:flex;flex-direction:column;}
 .field label{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:4px;}
@@ -126,6 +147,11 @@ a.lnk:hover{text-decoration:underline;}
 .field textarea{resize:vertical;min-height:60px;}
 .frow{display:grid;gap:14px;}
 .frow.c2{grid-template-columns:1fr 1fr;}
+.frow.c3{grid-template-columns:1fr 1fr 1fr;}
+.frow[hidden]{display:none;}
+.frow.c4{grid-template-columns:1fr 1fr 1fr 1fr;}
+.frow+.frow{margin-top:12px;}
+.chk-lbl{display:flex;align-items:center;gap:8px;font-size:13px;margin-top:22px;}
 .frow .field{margin-bottom:0;}
 
 /* ===== MODAL ===== */
@@ -167,7 +193,7 @@ a.lnk:hover{text-decoration:underline;}
   .navbtn,.minib{justify-content:center;}
   .topbar{flex-wrap:wrap;}
 }
-@media(max-width:560px){ .frow.c2{grid-template-columns:1fr;} .content{padding:14px 12px 40px;} .topbar{padding:12px;} .card-h{flex-wrap:wrap;} .card-h h3{white-space:normal;} .meta-bar span{white-space:normal!important;} .tools input[type=search]{min-width:0;} }
+@media(max-width:560px){ .frow.c2,.frow.c3,.frow.c4{grid-template-columns:1fr;} .content{padding:14px 12px 40px;} .topbar{padding:12px;} .card-h{flex-wrap:wrap;} .card-h h3{white-space:normal;} .meta-bar span{white-space:normal!important;} .tools input[type=search]{min-width:0;} }
 </style>
 </head>
 <body>
@@ -180,7 +206,8 @@ a.lnk:hover{text-decoration:underline;}
     <div class="brand-sub">Administración &amp; Finanzas</div>
     <nav id="nav">
       <div class="nav-group-lbl">Finanzas</div>
-      <button class="navbtn active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2.5h9l3 3v16h-12z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span>Solicitudes de pago</span></button>
+      <button class="navbtn active" type="button" data-vista="sol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2.5h9l3 3v16h-12z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span>Solicitudes de pago</span></button>
+      <button class="navbtn" type="button" data-vista="cuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4.5h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3z"/><path d="M4 17.5a3 3 0 0 1 3-3h11"/><path d="M8 8.5h6M8 11.5h4"/></svg><span>Contabilidad UY</span></button>
     </nav>
     <div class="sp"></div>
     <div class="data-actions">
@@ -197,8 +224,8 @@ a.lnk:hover{text-decoration:underline;}
   <div class="main">
     <div class="topbar">
       <div>
-        <h1>Solicitudes de pago</h1>
-        <div class="sub">Pedidos de Compras a Finanzas e informes de Tango</div>
+        <h1 id="pageTitle">Solicitudes de pago</h1>
+        <div class="sub" id="pageSub">Pedidos de Compras a Finanzas e informes de Tango</div>
       </div>
       <div id="topActions"></div>
     </div>
@@ -268,8 +295,26 @@ function vistaApp(perfil, cargo){
   document.getElementById('who-nombre').textContent = (perfil.nombre || perfil.email || '') + (cargo ? ' · ' + cargo : '');
   // Mismo criterio que public.puede_editar_sector(): los cargos lector/lectura solo ven.
   SP.editar = !!perfil.es_direccion || !['lector','lectura'].includes(String(cargo || '').toLowerCase());
+  irVista(location.hash === '#contabilidad-uy' ? 'cuy' : 'sol');
   spCargar();
 }
+
+/* ---------- Navegación entre solapas del menú lateral ---------- */
+let VISTA = 'sol';
+const VISTAS = {
+  sol: { titulo:'Solicitudes de pago', sub:'Pedidos de Compras a Finanzas e informes de Tango', hash:'' },
+  cuy: { titulo:'Contabilidad UY', sub:'Facturas (CFE) recibidas por Avance Oriental SAS · RUT 220754030013 · montos en pesos uruguayos', hash:'#contabilidad-uy' },
+};
+function irVista(v){
+  VISTA = VISTAS[v] ? v : 'sol';
+  document.querySelectorAll('#nav .navbtn').forEach(b => b.classList.toggle('active', b.dataset.vista === VISTA));
+  document.getElementById('pageTitle').textContent = VISTAS[VISTA].titulo;
+  document.getElementById('pageSub').textContent = VISTAS[VISTA].sub;
+  try { history.replaceState(null, '', location.pathname + location.search + VISTAS[VISTA].hash); } catch(e) {}
+  if (VISTA === 'cuy' && !CUY.cargado) { document.getElementById('topActions').innerHTML = ''; $main.innerHTML = '<div class="empty">Cargando…</div>'; cuyCargar(); return; }
+  spRender();
+}
+document.querySelectorAll('#nav .navbtn').forEach(b => b.addEventListener('click', () => irVista(b.dataset.vista)));
 
 /* ==========================================================================
    Solicitudes de pago — misma solapa que en la app de Compras (4housing-compras),
@@ -300,6 +345,10 @@ function pagoTxt(s){
     + (s.salio_informe_en ? '<div style="color:#b3853a" title="Ya no figura en Pagos a realizar: se estima pagada, anulada u otro motivo">⚠ fuera del informe ' + fmtFecha(s.salio_informe_en) + '</div>' : '');
 }
 const ICO = { pdf:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v6h6"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
+  edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.8-2.8L5 17.2V20z"/><path d="M13.5 6.5l4 4"/></svg>',
+  del:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg>',
+  xls:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 18v2h16v-2"/></svg>',
   upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>' };
 const INFORMES = [['oc_informe','Informe OC'], ['pend_facturar','Pendientes de facturar'], ['pagos_realizar','Pagos a realizar']];
 
@@ -354,11 +403,13 @@ async function spCargar(){
     SP.lista = lista.reverse(); SP.pend = pend; SP.pagos = pagos; SP.oci = oci; SP.meta = meta;
     SP.prov = {}; prov.forEach(p => { SP.prov[String(p.codigo||'').trim().toUpperCase()] = p.razon || p.comercial || ''; });
   } catch (error) {
+    if (VISTA !== 'sol') return;
     $main.innerHTML = '<div class="card"><div class="empty">No pude leer los datos de Solicitudes de pago: ' + esc(error.message)
       + '<br><span class="muted">Si dice "permission denied", falta correr el SQL de habilitación (sql/2026-10_solpago_carga_adminfin.sql del repo 4housing-compras).</span></div></div>';
     return;
   }
-  spRender();
+  SP.cargado = true;
+  if (VISTA === 'sol') spRender();
 }
 
 /* ---------- Constancia de los informes ---------- */
@@ -400,7 +451,7 @@ function tablaHerramientas(ns, placeholder){
     + (tablaHayFiltros(ns) ? '<button class="btn ghost sm" data-limpiar="' + ns + '">Limpiar filtros</button>' : '')
     + '<button class="btn ghost sm" data-ajustar="' + ns + '">Auto-ajustar columnas</button></div>';
 }
-function tablaHtml(ns, cols, filas, pie){
+function tablaHtml(ns, cols, filas, pie, claseFila){
   const on = c => (c.fecha ? !!(SP.fecha[ns]||{})[c.id] : !!(SP.colf[ns]||{})[c.id]);
   const o = SP.sort[ns];
   const th = c => '<th data-col="' + c.id + '"' + ((c.s || c.fecha || c.v) ? ' data-sort="' + ns + '|' + c.id + '" title="Ordenar" style="cursor:pointer"' : '') + '>' + esc(c.t)
@@ -408,7 +459,8 @@ function tablaHtml(ns, cols, filas, pie){
     + ((c.v || c.fecha) ? ' <button class="xlfbtn' + (on(c) ? ' on' : '') + '" data-f="' + ns + '|' + c.id + '" title="Filtrar">▾</button>' : '')
     + '<span class="col-resizer"></span></th>';
   return '<div class="tbl-hscroll"><table class="grid" data-tbl="' + ns + '"><thead><tr>' + cols.map(th).join('') + '</tr></thead><tbody>'
-    + filas.map(r => '<tr>' + cols.map(c => '<td' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + c.td(r) + '</td>').join('') + '</tr>').join('')
+    + filas.map(r => { const k = claseFila ? claseFila(r) : '';
+        return '<tr' + (k ? ' class="' + k + '"' : '') + '>' + cols.map(c => '<td' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + c.td(r) + '</td>').join('') + '</tr>'; }).join('')
     + '</tbody>' + (pie || '') + '</table></div>';
 }
 const TABLAS = {};   // ns → { cols, base() } para armar los filtros
@@ -498,7 +550,9 @@ function colAnchos(table){
 }
 
 /* ---------- Pantalla ---------- */
-function spRender(){
+// Todas las tablas llaman a spRender() al filtrar/ordenar: dibuja la solapa activa.
+function spRender(){ if (VISTA === 'cuy') cuyRender(); else if (SP.cargado) spRenderSol(); else $main.innerHTML = '<div class="empty">Cargando…</div>'; }
+function spRenderSol(){
   const tab = (id, l) => '<button class="mtab' + (SP.tab === id ? ' active' : '') + '" data-tab="' + id + '">' + l + '</button>';
   // Carga de informes: arriba a la derecha, como los botones de acción de la topbar de Compras
   document.getElementById('topActions').innerHTML = SP.editar
@@ -843,6 +897,256 @@ async function cargarInforme(inf){
     }
     spCargar();
   } catch (e) { ok.textContent = ''; err.textContent = 'Error: ' + (e.message || e); btn.disabled = false; }
+}
+
+/* ==========================================================================
+   Contabilidad UY — facturas (CFE) recibidas por Avance Oriental SAS (RUT 220754030013).
+   Tabla adminfin_contabilidad_uy (sql/2026-10_contabilidad_uy.sql). Lee el sector adminfin; escribe quien
+   edita adminfin (RLS con puede_editar_sector). Una sola fuente de verdad por fila:
+     · origen UYU → neto/iva/total_uyu tal cual la factura
+     · origen USD → neto/iva/total_usd + tc; los pesos se calculan acá (usd * tc), no se guardan
+   tc vacío = pendiente: la fila no suma a los totales en pesos y se resalta. Notas de crédito en negativo:
+   una factura anulada + su N/C con el mismo TC netean a 0.
+   ========================================================================== */
+const CUY_T = 'adminfin_contabilidad_uy';
+const CUY = { lista:[], cargado:false };
+// Rubros de la hoja "Listas" del Excel CONTABILIDAD_UY_AVANCE_ORIENTAL (sugerencias; se puede escribir otro)
+const CUY_RUBROS = ['A) VENTA','B) CMV VENTA','C) VENTA ALQUILER MODULO','D) COSTO ALQUILER MODULOS','E) VENTA ALQUILER REEFER','F) COSTO ALQUILER REEFER',
+  'G) VENTA SERV TERCERIZADOS','H) COSTO SERV TERCERIZADOS','I) LOGISTICA EGRESOS','I) LOGISTICA INGRESOS','J) OTROS INGRESOS','K) ESTRUCTURA','L) OTROS EGRESOS',
+  'M) INVERSIONES','N) SUELDOS','O) IMPUESTOS','P) PROVEEDORES','Q) AJUSTES CTAS','R) FINANCIERO'];
+const CUY_TIPOS = ['e-Factura','e-Ticket','Nota de Crédito','Nota de Débito','Factura BPS'];
+const CUY_ESTADOS = ['PAGADO','PENDIENTE','PARCIAL','ANULADA','N/C'];
+const CUY_BADGE = { 'PAGADO':'b-verde', 'ANULADA':'b-rojo', 'N/C':'b-gris', 'PENDIENTE':'b-ambar', 'PARCIAL':'b-ambar' };
+
+const cuyNum = v => (v == null || v === '') ? null : +v;
+const cuyEsUSD = r => r.origen_moneda === 'USD';
+const cuyTcPend = r => cuyEsUSD(r) && cuyNum(r.tc) == null;
+// Pesos derivados (§4 del spec): UYU directo; USD × TC; sin TC → null (no suma)
+function cuyPesos(r, k){
+  if (!cuyEsUSD(r)) return cuyNum(r[k + '_uyu']);
+  const tc = cuyNum(r.tc), u = cuyNum(r[k + '_usd']);
+  return (tc == null || u == null) ? null : Math.round(u * tc * 100) / 100;
+}
+const cuyRevisar = r => cuyTcPend(r) || !!String(r.observaciones || '').trim();
+function fmtUYU(v){ return v == null ? '—' : '$U ' + fmtNum(v); }
+function fmtTC(v){ return v == null ? '—' : (+v).toLocaleString('es-AR', { minimumFractionDigits:3, maximumFractionDigits:4 }); }
+function fmtPeriodo(p){ const t = String(p || ''); return /^\d{6}$/.test(t) ? t.slice(0,4) + '-' + t.slice(4) : (t || ''); }
+
+async function cuyCargar(){
+  try {
+    const filas = await selTodo(CUY_T, '*', 'id');
+    CUY.lista = filas.sort((a,b) => String(a.fecha||'').localeCompare(String(b.fecha||'')) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
+    CUY.cargado = true;
+  } catch (error) {
+    if (VISTA !== 'cuy') return;
+    $main.innerHTML = '<div class="card"><div class="empty">No pude leer Contabilidad UY: ' + esc(error.message)
+      + '<br><span class="muted">Si dice que la tabla no existe o "permission denied", falta correr sql/2026-10_contabilidad_uy.sql (y después los datos iniciales) en Supabase.</span></div></div>';
+    return;
+  }
+  if (VISTA === 'cuy') cuyRender();
+}
+
+function cuyCols(){
+  return [
+    { id:'fecha', t:'Fecha', fecha:r => r.fecha, td:r => '<span style="white-space:nowrap">' + fmtFecha(r.fecha) + '</span>' },
+    { id:'per', t:'Período', v:r => fmtPeriodo(r.periodo) || '(sin período)', td:r => esc(fmtPeriodo(r.periodo) || '—') },
+    { id:'prov', t:'Proveedor', v:r => r.proveedor || '(sin proveedor)', td:r => '<strong>' + esc(r.proveedor || '') + '</strong>' + (r.rut_emisor ? '<div class="muted">RUT ' + esc(r.rut_emisor) + '</div>' : '') },
+    { id:'tipo', t:'Tipo', v:r => r.tipo_cfe || '(sin tipo)', td:r => esc(r.tipo_cfe || '') },
+    { id:'serie', t:'Serie / N°', s:r => r.serie_numero || '', td:r => '<strong style="white-space:nowrap">' + esc(r.serie_numero || '—') + '</strong>' },
+    { id:'conc', t:'Concepto', s:r => r.concepto || '', cls:'wrap', td:r => esc(r.concepto || '') },
+    { id:'rubro', t:'Rubro', v:r => r.rubro || '(sin rubro)', td:r => esc(r.rubro || '—') },
+    { id:'proy', t:'Proyecto', v:r => r.proyecto || '(sin proyecto)', td:r => esc(r.proyecto || '—') },
+    { id:'mon', t:'Moneda', v:r => r.origen_moneda || '', td:r => esc(r.origen_moneda || '') },
+    { id:'orig', t:'Total origen', s:r => cuyNum(cuyEsUSD(r) ? r.total_usd : r.total_uyu), cls:'num',
+      td:r => cuyEsUSD(r) ? (r.total_usd == null ? '—' : 'US$ ' + fmtNum(r.total_usd)) : fmtUYU(cuyNum(r.total_uyu)) },
+    { id:'tc', t:'TC', v:r => !cuyEsUSD(r) ? 'No aplica (pesos)' : (cuyTcPend(r) ? 'TC pendiente' : 'Con TC'), s:r => cuyNum(r.tc), cls:'num',
+      td:r => !cuyEsUSD(r) ? '<span class="muted">—</span>'
+        : (SP.editar ? '<input class="tc-in' + (cuyTcPend(r) ? ' vacio' : '') + '" type="number" step="0.001" min="0" inputmode="decimal" data-tc="' + esc(r.id) + '" value="' + esc(r.tc == null ? '' : r.tc) + '" placeholder="pendiente" title="Cotización UYU por USD de esta factura">'
+                     : (cuyTcPend(r) ? '<span class="badge b-ambar">pendiente</span>' : fmtTC(r.tc))) },
+    { id:'neto', t:'Neto $U', s:r => cuyPesos(r,'neto'), cls:'num', td:r => fmtUYU(cuyPesos(r,'neto')) },
+    { id:'iva', t:'IVA $U', s:r => cuyPesos(r,'iva'), cls:'num', td:r => fmtUYU(cuyPesos(r,'iva')) },
+    { id:'total', t:'Total $U', s:r => cuyPesos(r,'total'), cls:'num', td:r => '<strong>' + fmtUYU(cuyPesos(r,'total')) + '</strong>' },
+    { id:'est', t:'Estado', v:r => r.estado_pago || '(sin estado)', td:r => r.estado_pago ? '<span class="badge ' + (CUY_BADGE[String(r.estado_pago).toUpperCase()] || 'b-gris') + '">' + esc(r.estado_pago) + '</span>' : '—' },
+    { id:'cta', t:'Cuenta', v:r => r.cuenta || '(sin cuenta)', td:r => esc(r.cuenta || '—') },
+    { id:'fpago', t:'Fecha de pago', fecha:r => r.fecha_pago, td:r => '<span style="white-space:nowrap">' + fmtFecha(r.fecha_pago) + '</span>' },
+    { id:'rel', t:'Doc. relacionado', s:r => r.doc_relacionado || '', td:r => esc(r.doc_relacionado || '—') },
+    { id:'obs', t:'Observaciones', v:r => String(r.observaciones || '').trim() ? 'Con observaciones' : 'Sin observaciones', cls:'wrap', td:r => esc(r.observaciones || '') },
+    { id:'acc', t:'', td:r => SP.editar ? '<div class="row-actions"><button class="iconbtn" title="Editar" data-cuy-ed="' + esc(r.id) + '">' + ICO.edit + '</button>'
+        + '<button class="iconbtn del" title="Eliminar" data-cuy-del="' + esc(r.id) + '">' + ICO.del + '</button></div>' : '' },
+  ];
+}
+const cuyTexto = r => [r.proveedor, r.rut_emisor, r.proveedor_cod, r.serie_numero, r.concepto, r.proyecto, r.rubro, r.cuenta, r.doc_relacionado, r.observaciones, r.tipo_cfe].join(' ');
+function cuyFiltradas(){ const cols = cuyCols(); TABLAS.cuy = { cols, base:() => CUY.lista }; return { cols, filas: tablaFiltrar('cuy', cols, CUY.lista, cuyTexto) }; }
+
+function cuyRender(){
+  document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="cuy-xls">' + ICO.xls + 'Exportar Excel</button>'
+    + (SP.editar ? '<button class="btn" id="cuy-nuevo">' + ICO.plus + 'Nuevo comprobante</button>' : '');
+  document.getElementById('cuy-xls').addEventListener('click', cuyExportar);
+  const bn = document.getElementById('cuy-nuevo'); if (bn) bn.addEventListener('click', () => cuyForm(null));
+
+  const { cols, filas } = cuyFiltradas();
+  const suma = k => filas.reduce((a,r) => a + (cuyPesos(r,k) || 0), 0);
+  const sinTc = filas.filter(cuyTcPend).length, conObs = filas.filter(r => String(r.observaciones || '').trim()).length;
+  const usd = filas.filter(cuyEsUSD).reduce((a,r) => a + (cuyNum(r.total_usd) || 0), 0);
+  const parcial = sinTc ? '<span class="warn">Total parcial: ' + sinTc + ' en USD sin TC no suman</span>' : 'Todos los comprobantes con TC';
+  const kpis = '<div class="kpi-grid">'
+    + '<div class="kpi"><div class="kpi-label">Total en pesos</div><div class="kpi-value">' + fmtUYU(suma('total')) + '</div><div class="kpi-sub">' + parcial + '</div></div>'
+    + '<div class="kpi"><div class="kpi-label">IVA compras</div><div class="kpi-value">' + fmtUYU(suma('iva')) + '</div><div class="kpi-sub">Neto ' + fmtUYU(suma('neto')) + '</div></div>'
+    + '<div class="kpi"><div class="kpi-label">Subtotal USD</div><div class="kpi-value">US$ ' + fmtNum(usd) + '</div><div class="kpi-sub">Facturas en dólares (la N/C netea la anulada)</div></div>'
+    + '<div class="kpi"><div class="kpi-label">Para revisar</div><div class="kpi-value' + ((sinTc || conObs) ? ' warn' : '') + '">' + filas.filter(cuyRevisar).length + '</div><div class="kpi-sub">' + sinTc + ' TC pendiente' + (sinTc === 1 ? '' : 's') + ' · ' + conObs + ' con observaciones</div></div>'
+    + '</div>';
+  const iN = cols.findIndex(c => c.id === 'neto');
+  const pie = '<tfoot><tr><td colspan="' + iN + '" class="num"><b>Total (' + filas.length + (filas.length !== CUY.lista.length ? ' de ' + CUY.lista.length : '') + ')' + (sinTc ? ' · parcial' : '') + '</b></td>'
+    + '<td class="num"><b>' + fmtUYU(suma('neto')) + '</b></td><td class="num"><b>' + fmtUYU(suma('iva')) + '</b></td><td class="num"><b>' + fmtUYU(suma('total')) + '</b></td>'
+    + '<td colspan="' + (cols.length - iN - 3) + '"></td></tr></tfoot>';
+  const head = cardH('Comprobantes', 'Una fila por CFE. Los montos en USD se pasan a pesos con el TC de cada factura (editable). En amarillo: TC pendiente u observaciones a revisar.');
+  $main.innerHTML = kpis + '<div class="card">' + head
+    + (CUY.lista.length ? tablaHerramientas('cuy', 'Buscar proveedor, RUT, serie, concepto, proyecto, observaciones…')
+        + (filas.length ? tablaHtml('cuy', cols, filas, pie, r => cuyRevisar(r) ? 'revisar' : '') : '<div class="empty">Ningún comprobante coincide con los filtros.</div>')
+        + (sinTc ? '<div class="muted" style="padding:8px 14px 12px;font-size:11.5px">⚠ Total parcial en pesos: ' + sinTc + ' comprobante' + (sinTc === 1 ? '' : 's') + ' en USD sin TC no suma' + (sinTc === 1 ? '' : 'n') + '. Para que una factura anulada y su nota de crédito neteen, cargales el mismo TC.</div>' : '')
+      : '<div class="empty">Todavía no hay comprobantes' + (SP.editar ? ': cargá el primero con "Nuevo comprobante".' : '.') + '</div>')
+    + '</div>';
+  tablaEventos();
+  $main.querySelectorAll('input[data-tc]').forEach(inp => {
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    inp.addEventListener('change', () => cuyGuardarTc(inp.dataset.tc, inp.value));
+  });
+  $main.querySelectorAll('[data-cuy-ed]').forEach(b => b.addEventListener('click', () => cuyForm(b.dataset.cuyEd)));
+  $main.querySelectorAll('[data-cuy-del]').forEach(b => b.addEventListener('click', () => cuyPreguntarBorrar(b.dataset.cuyDel)));
+}
+
+// Guarda en la base y devuelve la fila tal como quedó (return=representation)
+async function cuyUpdate(id, cambios){
+  const { data, error } = await sb.from(CUY_T).update(cambios).eq('id', id).select();
+  if (error) throw error;
+  if (!data || !data.length) throw new Error('No se guardó: sin permiso de edición o el comprobante ya no existe.');
+  const i = CUY.lista.findIndex(x => x.id === id); if (i >= 0) CUY.lista[i] = data[0];
+  return data[0];
+}
+// Documentos enlazados por "Doc. relacionado" (ej. factura anulada ↔ su N/C), en USD
+function cuyRelacionados(r){
+  const serie = String(r.serie_numero || '').trim(), rel = String(r.doc_relacionado || '').trim();
+  return CUY.lista.filter(x => x.id !== r.id && cuyEsUSD(x)
+    && ((rel && String(x.serie_numero || '').trim() === rel) || (serie && String(x.doc_relacionado || '').trim() === serie)));
+}
+async function cuyGuardarTc(id, valor){
+  const r = CUY.lista.find(x => x.id === id); if (!r) return;
+  const tc = valor === '' ? null : +valor;
+  if (tc != null && !(tc > 0)) { toast('El TC tiene que ser mayor a 0'); cuyRender(); return; }
+  try {
+    const fila = await cuyUpdate(id, { tc });
+    const otros = tc == null ? [] : cuyRelacionados(fila).filter(x => cuyNum(x.tc) !== tc);
+    cuyRender();
+    if (!otros.length) { toast('TC guardado' + (tc == null ? ' (quedó pendiente)' : '')); return; }
+    abrirModal('Mismo TC en el documento relacionado',
+      '<p style="margin:0;font-size:13px;line-height:1.55;color:#5f5c52">' + esc(fila.serie_numero || '') + ' está relacionado con <b>' + otros.map(x => esc(x.serie_numero || x.id)).join(', ')
+        + '</b>. Para que la factura anulada y la nota de crédito neteen en pesos tienen que tener el mismo TC. ¿Les cargo también ' + fmtTC(tc) + '?</p>',
+      '<button class="btn ghost" id="cuy-tc-no">No, solo esta</button><button class="btn" id="cuy-tc-si">Sí, aplicar</button>');
+    document.getElementById('cuy-tc-no').addEventListener('click', () => { cerrarModal(); toast('TC guardado'); });
+    document.getElementById('cuy-tc-si').addEventListener('click', async () => {
+      try { for (const x of otros) await cuyUpdate(x.id, { tc }); cerrarModal(); toast('TC aplicado a ' + (otros.length + 1) + ' comprobantes'); cuyRender(); }
+      catch (e) { cerrarModal(); toast('Error: ' + (e.message || e)); cuyRender(); }
+    });
+  } catch (e) { toast('No se guardó el TC: ' + (e.message || e)); cuyRender(); }
+}
+
+/* ---------- Alta / edición ---------- */
+function cuyForm(id){
+  const r = id ? CUY.lista.find(x => x.id === id) : null; if (id && !r) return;
+  const c = r || { fecha: hoyISO(), origen_moneda:'USD', tipo_cfe:'e-Factura', estado_pago:'PENDIENTE', anulada:false };
+  const usd = c.origen_moneda === 'USD';
+  const m = k => { const v = usd ? c[k + '_usd'] : c[k + '_uyu']; return v == null ? '' : v; };
+  const dl = (idL, vals) => '<datalist id="' + idL + '">' + [...new Set(vals.filter(Boolean))].map(v => '<option value="' + esc(v) + '">').join('') + '</datalist>';
+  const inp = (idI, lbl, val, extra) => '<div class="field"><label>' + lbl + '</label><input id="' + idI + '" value="' + esc(val == null ? '' : val) + '"' + (extra || '') + '></div>';
+  const body =
+      '<div class="frow c3">' + inp('cf-fecha','Fecha *', c.fecha, ' type="date"') + inp('cf-per','Período (AAAAMM)', c.periodo, ' inputmode="numeric" placeholder="202610"')
+    +   inp('cf-tipo','Tipo de CFE', c.tipo_cfe, ' list="dl-tipo"') + '</div>'
+    + '<div class="frow c3">' + inp('cf-prov','Proveedor *', c.proveedor, ' list="dl-prov"') + inp('cf-cod','Código proveedor', c.proveedor_cod, ' placeholder="Ej. LASENS"') + inp('cf-rut','RUT emisor', c.rut_emisor) + '</div>'
+    + '<div class="frow c3">' + inp('cf-serie','Serie / N°', c.serie_numero, ' placeholder="Ej. A-34989"') + inp('cf-rubro','Rubro', c.rubro, ' list="dl-rubro"') + inp('cf-proy','Proyecto', c.proyecto, ' list="dl-proy" placeholder="Ej. PL0090"') + '</div>'
+    + '<div class="frow">' + inp('cf-conc','Concepto', c.concepto) + '</div>'
+    + '<div class="frow c4"><div class="field"><label>Moneda de la factura *</label><select id="cf-mon"><option value="USD"' + (usd ? ' selected' : '') + '>USD (dólares)</option><option value="UYU"' + (!usd ? ' selected' : '') + '>UYU (pesos)</option></select></div>'
+    +   inp('cf-neto','Neto', m('neto'), ' type="number" step="0.01"') + inp('cf-iva','IVA', m('iva'), ' type="number" step="0.01"') + inp('cf-total','Total *', m('total'), ' type="number" step="0.01"') + '</div>'
+    + '<div class="frow c4" id="cf-tc-row"' + (usd ? '' : ' hidden') + '>' + inp('cf-tc','TC (UYU por USD)', c.tc, ' type="number" step="0.001" min="0" placeholder="vacío = pendiente"')
+    +   '<div class="field" style="grid-column:span 3"><label>&nbsp;</label><div class="muted" style="font-size:11.5px;padding-top:8px">Notas de crédito en negativo. El TC se puede completar después desde la tabla.</div></div></div>'
+    + '<div class="frow c3">' + inp('cf-est','Estado de pago', c.estado_pago, ' list="dl-est"') + inp('cf-cta','Cuenta', c.cuenta, ' list="dl-cta" placeholder="Ej. Santander USD"') + inp('cf-fpago','Fecha de pago', c.fecha_pago, ' type="date"') + '</div>'
+    + '<div class="frow c3">' + inp('cf-rel','Doc. relacionado', c.doc_relacionado, ' placeholder="Serie que anula / anulada por"')
+    +   '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink)"><input type="checkbox" id="cf-anul"' + (c.anulada ? ' checked' : '') + ' style="width:auto"> Anulada</label></div><div></div></div>'
+    + '<div class="frow"><div class="field"><label>Observaciones</label><textarea id="cf-obs" rows="2" placeholder="Algo a revisar (queda la fila en amarillo)">' + esc(c.observaciones || '') + '</textarea></div></div>'
+    + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.lista.map(x => x.proveedor)) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
+    + dl('dl-proy', CUY.lista.map(x => x.proyecto)) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', ['Santander USD','Santander pesos'].concat(CUY.lista.map(x => x.cuenta)))
+    + '<div class="err" id="cf-err"></div>';
+  abrirModal(r ? 'Editar comprobante · ' + (r.serie_numero || r.id) : 'Nuevo comprobante', body,
+    '<button class="btn ghost" id="cf-cerrar">Cancelar</button><button class="btn" id="cf-ok">Guardar</button>', 'wide');
+  const $ = i => document.getElementById(i);
+  $('cf-cerrar').addEventListener('click', cerrarModal);
+  $('cf-mon').addEventListener('change', () => { $('cf-tc-row').hidden = $('cf-mon').value !== 'USD'; });
+  // Si cargás Neto e IVA, el Total se completa solo (mientras no lo hayas escrito a mano)
+  let totalAMano = $('cf-total').value !== '';
+  $('cf-total').addEventListener('input', () => { totalAMano = $('cf-total').value !== ''; });
+  const autoTotal = () => { if (totalAMano) return; const n = parseFloat($('cf-neto').value), i = parseFloat($('cf-iva').value);
+    if (!isNaN(n) || !isNaN(i)) $('cf-total').value = (Math.round(((isNaN(n) ? 0 : n) + (isNaN(i) ? 0 : i)) * 100) / 100).toFixed(2); };
+  $('cf-neto').addEventListener('input', autoTotal); $('cf-iva').addEventListener('input', autoTotal);
+  $('cf-ok').addEventListener('click', () => cuyGuardar(r ? r.id : null));
+}
+async function cuyGuardar(id){
+  const $ = i => document.getElementById(i), v = i => $(i).value.trim(), n = i => { const t = v(i); return t === '' ? null : +t; };
+  const err = $('cf-err'); err.textContent = '';
+  const mon = $('cf-mon').value, usd = mon === 'USD';
+  if (!v('cf-fecha')) { err.textContent = 'Poné la fecha.'; return; }
+  if (!v('cf-prov')) { err.textContent = 'Poné el proveedor.'; return; }
+  if (n('cf-total') == null) { err.textContent = 'Poné el total.'; return; }
+  const per = v('cf-per'); if (per && !/^\d{6}$/.test(per)) { err.textContent = 'El período va como AAAAMM (ej. 202610).'; return; }
+  const tc = usd ? n('cf-tc') : null; if (tc != null && !(tc > 0)) { err.textContent = 'El TC tiene que ser mayor a 0.'; return; }
+  const fila = {
+    fecha: v('cf-fecha'), periodo: per ? +per : null, tipo_cfe: v('cf-tipo') || null, proveedor: v('cf-prov'), proveedor_cod: v('cf-cod') || null,
+    rut_emisor: v('cf-rut') || null, serie_numero: v('cf-serie') || null, rubro: v('cf-rubro') || null, proyecto: v('cf-proy') || null, concepto: v('cf-conc') || null,
+    origen_moneda: mon, tc,
+    neto_usd: usd ? n('cf-neto') : null, iva_usd: usd ? n('cf-iva') : null, total_usd: usd ? n('cf-total') : null,
+    neto_uyu: usd ? null : n('cf-neto'), iva_uyu: usd ? null : n('cf-iva'), total_uyu: usd ? null : n('cf-total'),
+    estado_pago: v('cf-est') || null, cuenta: v('cf-cta') || null, fecha_pago: v('cf-fpago') || null,
+    doc_relacionado: v('cf-rel') || null, anulada: $('cf-anul').checked, observaciones: v('cf-obs') || null,
+  };
+  $('cf-ok').disabled = true;
+  try {
+    if (id) await cuyUpdate(id, fila);
+    else {
+      const { data, error } = await sb.from(CUY_T).insert(fila).select();
+      if (error) throw error;
+      if (!data || !data.length) throw new Error('No se guardó: sin permiso de edición.');
+      CUY.lista.push(data[0]);
+      CUY.lista.sort((a,b) => String(a.fecha||'').localeCompare(String(b.fecha||'')) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
+    }
+    cerrarModal(); toast(id ? 'Comprobante actualizado' : 'Comprobante agregado'); cuyRender();
+  } catch (e) { err.textContent = 'Error: ' + (e.message || e); $('cf-ok').disabled = false; }
+}
+function cuyPreguntarBorrar(id){
+  const r = CUY.lista.find(x => x.id === id); if (!r) return;
+  abrirModal('Eliminar comprobante',
+    '<p style="margin:0;font-size:14px;color:#5f5c52;line-height:1.5">Se borra ' + esc(r.tipo_cfe || 'el comprobante') + ' <b>' + esc(r.serie_numero || r.id) + '</b> de ' + esc(r.proveedor || '')
+      + ' — no se puede deshacer. Si la factura fue anulada, en vez de borrarla conviene marcarla <b>Anulada</b> y cargar su nota de crédito. ¿Confirmás?</p><div class="err" id="cd-err"></div>',
+    '<button class="btn ghost" id="cd-no">Cancelar</button><button class="btn danger" id="cd-si">Eliminar</button>');
+  document.getElementById('cd-no').addEventListener('click', cerrarModal);
+  document.getElementById('cd-si').addEventListener('click', async () => {
+    const { data, error } = await sb.from(CUY_T).delete().eq('id', id).select();
+    if (error || !data || !data.length) { document.getElementById('cd-err').textContent = 'No se eliminó: ' + ((error && error.message) || 'sin permiso de edición.'); return; }
+    CUY.lista = CUY.lista.filter(x => x.id !== id); cerrarModal(); toast('Comprobante eliminado'); cuyRender();
+  });
+}
+
+/* ---------- Exportar a Excel (respeta búsqueda, filtros y orden) ---------- */
+function cuyExportar(){
+  if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+  const { filas } = cuyFiltradas();
+  const datos = filas.map(r => ({
+    'Fecha': r.fecha || '', 'Período': r.periodo || '', 'Proveedor': r.proveedor || '', 'Código': r.proveedor_cod || '', 'RUT emisor': r.rut_emisor || '',
+    'Tipo CFE': r.tipo_cfe || '', 'Serie / N°': r.serie_numero || '', 'Concepto': r.concepto || '', 'Rubro': r.rubro || '', 'Proyecto': r.proyecto || '',
+    'Moneda': r.origen_moneda || '', 'Neto USD': cuyNum(r.neto_usd), 'IVA USD': cuyNum(r.iva_usd), 'Total USD': cuyNum(r.total_usd), 'TC': cuyNum(r.tc),
+    'Neto $U': cuyPesos(r,'neto'), 'IVA $U': cuyPesos(r,'iva'), 'Total $U': cuyPesos(r,'total'),
+    'Estado de pago': r.estado_pago || '', 'Cuenta': r.cuenta || '', 'Fecha de pago': r.fecha_pago || '', 'Anulada': r.anulada ? 'Sí' : 'No',
+    'Doc. relacionado': r.doc_relacionado || '', 'Observaciones': r.observaciones || '', 'TC pendiente': cuyTcPend(r) ? 'Sí' : '' }));
+  const ws = XLSX.utils.json_to_sheet(datos), wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Contabilidad UY');
+  XLSX.writeFile(wb, 'Contabilidad_UY_' + hoyISO() + '.xlsx');
 }
 
 async function salir(){
