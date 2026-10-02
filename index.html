@@ -1431,7 +1431,9 @@ function cuyRenderConc(g){
           + (cs.length ? '<div class="muted">' + cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); return c ? esc(c.serie_numero || c.id) + ' ' + fmtMon(cuyAplImporte(a), mon) + (cuyCompConc(c) === 'Pago parcial' ? ' (parcial)' : '') : ''; }).join(', ') + '</div>' : '')
           + (e === 'Diferencia' ? '<div class="muted" style="color:#b0584f">' + (isNaN(d) ? 'factura sin TC' : 'dif. ' + fmtMon(d, mon)) + '</div>' : ''); } },
     { id:'as', t:'Asiento', v:m => m.tipo === 'saldo_inicial' ? 'No aplica' : (String(m.asiento_num || '').trim() ? 'Registrado' : 'Pendiente'), td:m => m.tipo === 'saldo_inicial' ? '<span class="muted">—</span>' : esc(m.asiento_num || 'pendiente') },
-    { id:'acc', t:'', td:m => SP.editar ? '<div class="row-actions">' + (+m.importe < 0 && m.tipo !== 'gasto_bancario' && m.tipo !== 'saldo_inicial' ? '<button class="btn ghost sm" data-vinc="' + esc(m.id) + '">Facturas</button>' : '')
+    { id:'acc', t:'', td:m => SP.editar ? '<div class="row-actions">'
+        + (cuyMovEstado(m) === 'Sin factura' ? '<button class="btn ghost sm" data-gbanc="' + esc(m.id) + '" title="Es una comisión / gasto del banco: no lleva factura. El respaldo es el extracto y genera su asiento de gasto bancario.">Es gasto bancario</button>' : '')
+        + (+m.importe < 0 && m.tipo !== 'gasto_bancario' && m.tipo !== 'saldo_inicial' ? '<button class="btn ghost sm" data-vinc="' + esc(m.id) + '">Facturas</button>' : '')
         + '<button class="iconbtn" title="Editar" data-mov-ed="' + esc(m.id) + '">' + ICO.edit + '</button><button class="iconbtn del" title="Eliminar" data-mov-del="' + esc(m.id) + '">' + ICO.del + '</button></div>' : '' },
   ];
   const txtM = m => [m.concepto, m.clasificacion, m.proveedor, m.proveedor_cod, m.rubro, m.auxiliar, m.fac, m.comentarios, m.asiento_num].join(' ');
@@ -1465,6 +1467,14 @@ function cuyRenderConc(g){
   $main.querySelectorAll('[data-cie]').forEach(i => { i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
     i.addEventListener('change', () => cuyGuardarCierre(cn, i.dataset.cie, i.value)); });
   $main.querySelectorAll('[data-vinc]').forEach(b => b.addEventListener('click', () => cuyVincular(b.dataset.vinc)));
+  // Un clic: el movimiento es una comisión / gasto del banco sin factura (se puede deshacer editándolo)
+  $main.querySelectorAll('[data-gbanc]').forEach(b => b.addEventListener('click', async () => {
+    const m = CUY.movs.find(x => x.id === b.dataset.gbanc); if (!m) return; b.disabled = true;
+    const c = { tipo: 'gasto_bancario' }; if (!String(m.clasificacion || '').trim()) c.clasificacion = 'GASTOS BANCARIOS';
+    if (!String(m.rubro || '').trim()) c.rubro = 'K) ESTRUCTURA';   // mismo rubro que los demás gastos bancarios de la planilla
+    try { await cuyMovGuardar(m.id, c); toast('Marcado como gasto bancario (sin factura)'); cuyRender(); }
+    catch (e) { b.disabled = false; toast('No se guardó: ' + (e.message || e)); }
+  }));
   $main.querySelectorAll('[data-mov-ed]').forEach(b => b.addEventListener('click', () => cuyMovForm(b.dataset.movEd)));
   $main.querySelectorAll('[data-mov-del]').forEach(b => b.addEventListener('click', () => cuyMovBorrar(b.dataset.movDel)));
 }
