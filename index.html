@@ -911,7 +911,7 @@ async function cargarInforme(inf){
 const CUY_T = 'adminfin_contabilidad_uy';
 const CUY = { lista:[], cargado:false, movs:[], plan:{}, movErr:'', tab:'comp', asTab:'fac',
               ctaSel:{ banco:'Santander USD', efectivo:'Efectivo pesos' }, sel:{ fac:new Set(), mov:new Set() },
-              dic:{ cuentas:[], eerr:[] }, dicErr:'', cots:[], cierres:{}, cotErr:'' };
+              dic:{ cuentas:[], eerr:[] }, dicErr:'', cots:[], cierres:{}, cotErr:'', apl:[] };
 // Rubros de la hoja "Listas" del Excel CONTABILIDAD_UY_AVANCE_ORIENTAL (sugerencias; se puede escribir otro)
 const CUY_RUBROS = ['A) VENTA','B) CMV VENTA','C) VENTA ALQUILER MODULO','D) COSTO ALQUILER MODULOS','E) VENTA ALQUILER REEFER','F) COSTO ALQUILER REEFER',
   'G) VENTA SERV TERCERIZADOS','H) COSTO SERV TERCERIZADOS','I) LOGISTICA EGRESOS','I) LOGISTICA INGRESOS','J) OTROS INGRESOS','K) ESTRUCTURA','L) OTROS EGRESOS',
@@ -942,6 +942,8 @@ async function cuyCargar(){
     CUY.lista = filas.sort((a,b) => String(a.fecha||'').localeCompare(String(b.fecha||'')) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
     if (extra.error) { CUY.movErr = extra.error.message || String(extra.error); CUY.movs = []; CUY.plan = {}; }
     else { CUY.movErr = ''; CUY.movs = extra[0]; CUY.plan = {}; extra[1].forEach(p => { CUY.plan[p.clave] = p; }); }
+    // Aplicaciones pago ↔ factura (pagos parciales): sql/2026-10_contabilidad_uy_aplicaciones.sql
+    if (!CUY.movErr) { try { CUY.apl = await selTodo(CUY_APL_T, '*', 'id'); } catch (e) { CUY.movErr = 'aplicaciones: ' + (e.message || e) + ' — falta correr sql/2026-10_contabilidad_uy_aplicaciones.sql'; } }
     await Promise.all([cuyCargarDic(), cuyCargarCot()]);
     CUY.cargado = true;
   } catch (error) {
@@ -976,8 +978,10 @@ function cuyCols(){
     { id:'est', t:'Estado', v:r => r.estado_pago || '(sin estado)', td:r => r.estado_pago ? '<span class="badge ' + (CUY_BADGE[String(r.estado_pago).toUpperCase()] || 'b-gris') + '">' + esc(r.estado_pago) + '</span>' : '—' },
     { id:'cta', t:'Cuenta', v:r => r.cuenta || '(sin cuenta)', td:r => esc(r.cuenta || '—') },
     { id:'fpago', t:'Fecha de pago', fecha:r => r.fecha_pago, td:r => '<span style="white-space:nowrap">' + fmtFecha(r.fecha_pago) + '</span>' },
-    { id:'conc', t:'Conciliación', v:r => cuyCompConc(r), td:r => { const e = cuyCompConc(r), m = r.movimiento_id && CUY.movs.find(x => x.id === r.movimiento_id);
-        return '<span class="badge ' + (e === 'Con movimiento' ? 'b-verde' : e === 'Sin movimiento' ? 'b-ambar' : 'b-gris') + '">' + esc(e) + '</span>' + (m ? '<div class="muted">' + esc(m.cuenta) + ' ' + fmtFecha(m.fecha) + '</div>' : ''); } },
+    { id:'conc', t:'Conciliación', v:r => cuyCompConc(r), td:r => { const e = cuyCompConc(r), mon = cuyEsUSD(r) ? 'USD' : 'UYU';
+        const pagos = cuyAplDeComp(r.id).map(a => { const m = CUY.movs.find(x => x.id === a.movimiento_id); return m ? '<div class="muted">' + esc(m.cuenta) + ' ' + fmtFecha(m.fecha) + ' · ' + fmtMon(cuyAplImporte(a), cuyCta(m.cuenta).mon) + '</div>' : ''; }).join('');
+        return '<span class="badge ' + (e === 'Con movimiento' ? 'b-verde' : e === 'Pagado de más' ? 'b-rojo' : (e === 'Sin movimiento' || e === 'Pago parcial') ? 'b-ambar' : 'b-gris') + '">' + esc(e) + '</span>'
+          + (e === 'Pago parcial' || e === 'Pagado de más' ? '<div class="muted">saldo ' + fmtMon(cuySaldoFac(r), mon) + '</div>' : '') + pagos; } },
     { id:'rel', t:'Doc. relacionado', s:r => r.doc_relacionado || '', td:r => esc(r.doc_relacionado || '—') },
     { id:'obs', t:'Observaciones', v:r => String(r.observaciones || '').trim() ? 'Con observaciones' : 'Sin observaciones', cls:'wrap', td:r => esc(r.observaciones || '') },
     { id:'acc', t:'', td:r => SP.editar ? '<div class="row-actions"><button class="iconbtn" title="Editar" data-cuy-ed="' + esc(r.id) + '">' + ICO.edit + '</button>'
@@ -1142,7 +1146,8 @@ function cuyPreguntarBorrar(id){
     if (error || !data || !data.length) { document.getElementById('cd-err').textContent = 'No se eliminó: ' + ((error && error.message) || 'sin permiso de edición.'); return; }
     CUY.lista = CUY.lista.filter(x => x.id !== id);
     // Si era una factura en efectivo con su movimiento de caja automático (y nada más vinculado), se borra también
-    const m = r.movimiento_id && CUY.movs.find(x => x.id === r.movimiento_id);
+    const ap = cuyAplDeComp(id)[0], m = ap && CUY.movs.find(x => x.id === ap.movimiento_id);
+    CUY.apl = CUY.apl.filter(a => a.comprobante_id !== id);   // la base las borra sola (on delete cascade)
     let extra = '';
     if (m && m.origen === 'factura_efectivo' && !cuyCompDeMov(m.id).length) { try { await cuyMovBorrarDB(m.id); extra = ' (y su movimiento de caja)'; } catch (e) { extra = ' · ⚠ quedó su movimiento de caja'; } }
     cerrarModal(); toast('Comprobante eliminado' + extra); cuyRender();
@@ -1171,7 +1176,8 @@ function cuyExportar(){
    (sql/2026-10_contabilidad_uy_conciliacion.sql). Tablas:
      · adminfin_cuy_movimientos: movimientos de cada cuenta (extracto Santander USD / pesos, caja Efectivo
        USD / pesos), importe con signo en la moneda de la cuenta.
-     · adminfin_contabilidad_uy.movimiento_id: con qué movimiento se pagó cada factura (N facturas → 1 movimiento).
+     · adminfin_cuy_aplicaciones: cuánto de cada movimiento se aplica a cada factura (pagos parciales: una factura
+       puede tener varios pagos y un pago varias facturas). Saldo de la factura = total − aplicado.
      · adminfin_cuy_plan: plan de cuentas (clave → código Tango) + saldo según extracto / arqueo por cuenta.
    Conciliar = cada pago del extracto tiene su(s) factura(s) por el mismo importe, y el saldo según libros
    coincide con el saldo del extracto (o con el arqueo, en efectivo). Los gastos bancarios no llevan factura:
@@ -1179,7 +1185,7 @@ function cuyExportar(){
    Asientos: mismo formato de importación Tango que Tesorería (4housing-compras): hojas Asientos contables /
    Renglones / Cotizaciones / Auxiliares, en Borrador, y N° de asiento cargado a mano para saber qué quedó registrado.
    ========================================================================== */
-const CUY_MOV_T = 'adminfin_cuy_movimientos', CUY_PLAN_T = 'adminfin_cuy_plan';
+const CUY_MOV_T = 'adminfin_cuy_movimientos', CUY_PLAN_T = 'adminfin_cuy_plan', CUY_APL_T = 'adminfin_cuy_aplicaciones';
 const CUY_CTAS = [ { n:'Santander USD', mon:'USD', g:'banco' }, { n:'Santander pesos', mon:'UYU', g:'banco' },
                    { n:'Efectivo USD', mon:'USD', g:'efectivo' }, { n:'Efectivo pesos', mon:'UYU', g:'efectivo' } ];
 const cuyCta = n => CUY_CTAS.find(c => c.n === n) || null;
@@ -1269,16 +1275,46 @@ function cuyEnMoneda(r, mon){
   const tc = cuyNum(r.tc); if (tc == null) return null;
   return r2(mon === 'UYU' ? tot * tc : tot / tc);
 }
-const cuyCompDeMov = mid => CUY.lista.filter(x => x.movimiento_id === mid);
+/* ---------- Aplicaciones pago ↔ factura ---------- */
+const cuyAplDeMov = mid => CUY.apl.filter(a => a.movimiento_id === mid);
+const cuyAplDeComp = cid => CUY.apl.filter(a => a.comprobante_id === cid);
+const cuyCompDeMov = mid => cuyAplDeMov(mid).map(a => CUY.lista.find(c => c.id === a.comprobante_id)).filter(Boolean);
+const cuyFacTotal = c => cuyNum(cuyEsUSD(c) ? c.total_usd : c.total_uyu) || 0;
+// Pasa un importe de la moneda de la cuenta (mc) a la de la factura (o al revés), con el TC de la factura o la cotización del día
+function cuyTcCruce(c, fecha){ const t = cuyNum(c.tc); if (t != null) return t; const k = cuyCotDe(fecha, 'uyu_usd'); return k ? k.v : null; }
+// Importe aplicado en la moneda de la cuenta del movimiento (vacío = total de la factura)
+function cuyAplImporte(a){
+  if (cuyNum(a.importe) != null) return +a.importe;
+  const m = CUY.movs.find(x => x.id === a.movimiento_id), c = CUY.lista.find(x => x.id === a.comprobante_id); if (!m || !c) return null;
+  return cuyEnMoneda(c, cuyCta(m.cuenta).mon);
+}
+// Importe aplicado expresado en la moneda de la factura
+function cuyAplEnOrigen(a){
+  const m = CUY.movs.find(x => x.id === a.movimiento_id), c = CUY.lista.find(x => x.id === a.comprobante_id), v = cuyAplImporte(a);
+  if (!m || !c || v == null) return null;
+  const mc = cuyCta(m.cuenta).mon, mo = cuyEsUSD(c) ? 'USD' : 'UYU'; if (mc === mo) return v;
+  const tc = cuyTcCruce(c, m.fecha); if (!tc) return null;
+  return r2(mo === 'USD' ? v / tc : v * tc);
+}
+// Saldo pendiente de la factura, en su moneda (null si falta un TC para calcularlo)
+function cuySaldoFac(c){ let s = cuyFacTotal(c); for (const a of cuyAplDeComp(c.id)) { const v = cuyAplEnOrigen(a); if (v == null) return null; s -= v; } return r2(s); }
+// Saldo pendiente expresado en la moneda de una cuenta
+function cuySaldoEn(c, mon, fecha){
+  const sal = cuySaldoFac(c); if (sal == null) return null;
+  const mo = cuyEsUSD(c) ? 'USD' : 'UYU'; if (mo === mon) return sal;
+  const tc = cuyTcCruce(c, fecha); if (!tc) return null; return r2(mon === 'UYU' ? sal * tc : sal / tc);
+}
 function cuyCompConc(r){
-  if (r.movimiento_id) return 'Con movimiento';
+  if (cuyAplDeComp(r.id).length) { const sal = cuySaldoFac(r);
+    if (sal == null || Math.abs(sal) <= 0.01) return 'Con movimiento';
+    return (cuyFacTotal(r) > 0 ? sal > 0 : sal < 0) ? 'Pago parcial' : 'Pagado de más'; }
   if (r.anulada || String(r.estado_pago || '').toUpperCase() === 'ANULADA' || String(r.estado_pago || '').toUpperCase() === 'N/C') return 'No aplica';
-  return String(r.estado_pago || '').toUpperCase() === 'PAGADO' ? 'Sin movimiento' : 'No pagada';
+  return ['PAGADO','PARCIAL'].includes(String(r.estado_pago || '').toUpperCase()) ? 'Sin movimiento' : 'No pagada';
 }
 function cuyMovDif(m){
-  const cta = cuyCta(m.cuenta), comps = cuyCompDeMov(m.id); if (!comps.length) return null;
-  let s = 0; for (const c of comps) { const v = cuyEnMoneda(c, cta ? cta.mon : 'UYU'); if (v == null) return NaN; s += v; }
-  return r2(+m.importe + s);   // egreso negativo + facturas positivas = 0 si concilia
+  const apls = cuyAplDeMov(m.id); if (!apls.length) return null;
+  let s = 0; for (const a of apls) { const v = cuyAplImporte(a); if (v == null) return NaN; s += v; }
+  return r2(+m.importe + s);   // egreso negativo + aplicado positivo = 0 si concilia
 }
 // Cambio de moneda entre las dos cuentas del Santander UY: la salida de una cuenta tiene que tener su entrada
 // en la otra el mismo día. Se emparejan por fecha y por orden de importe (el más chico con el más chico).
@@ -1352,14 +1388,17 @@ function cuyRenderConc(g){
   const movs = cuyMovsDe(cn), saldo = {}; let acc = 0; movs.forEach(m => { acc = r2(acc + (+m.importe || 0)); saldo[m.id] = acc; });
   const libros = r2(movs.reduce((a,m) => a + (+m.importe || 0), 0));
   const cies = cuyCierresDe(cn, movs), ultimo = cies.filter(c => c.ext != null).pop() || null;
-  const facs = CUY.lista.filter(r => !r.anulada && (r.cuenta === cn || (r.movimiento_id && movs.some(m => m.id === r.movimiento_id))) && cuyCompConc(r) !== 'No aplica' && cuyCompConc(r) !== 'No pagada');
-  const totFac = r2(facs.reduce((a,r) => a + (cuyEnMoneda(r, mon) || 0), 0)), facSinTc = facs.filter(r => cuyEnMoneda(r, mon) == null).length;
+  const idsMov = new Set(movs.map(m => m.id)), aplCta = CUY.apl.filter(a => idsMov.has(a.movimiento_id));
+  const facs = CUY.lista.filter(r => !r.anulada && (r.cuenta === cn || aplCta.some(a => a.comprobante_id === r.id)) && cuyCompConc(r) !== 'No aplica' && cuyCompConc(r) !== 'No pagada');
+  // Pagado según facturas: lo aplicado a pagos de esta cuenta + las facturas marcadas pagadas por esta cuenta que todavía no tienen pago
+  const sinApl = facs.filter(r => !cuyAplDeComp(r.id).length);
+  const totFac = r2(aplCta.reduce((a,x) => a + (cuyAplImporte(x) || 0), 0) + sinApl.reduce((a,r) => a + (cuyEnMoneda(r, mon) || 0), 0)), facSinTc = sinApl.filter(r => cuyEnMoneda(r, mon) == null).length;
   const pagos = movs.filter(m => +m.importe < 0 && (m.tipo === 'pago' || m.tipo === 'otro'));
   const totPag = r2(-pagos.reduce((a,m) => a + (+m.importe || 0), 0)), difFP = r2(totFac - totPag);
   const gastos = r2(-movs.filter(m => m.tipo === 'gasto_bancario').reduce((a,m) => a + (+m.importe || 0), 0));
   const sinFac = movs.filter(m => cuyMovEstado(m) === 'Sin factura').length, conDif = movs.filter(m => cuyMovEstado(m) === 'Diferencia').length;
   const otrosRev = movs.filter(m => ['Sin espejo','Sin clasificar'].includes(cuyMovEstado(m))).length;
-  const facSinMov = facs.filter(r => !r.movimiento_id);
+  const facSinMov = facs.filter(r => ['Sin movimiento','Pago parcial','Pagado de más'].includes(cuyCompConc(r)));
   const ok = v => Math.abs(v) <= 0.01;
 
   const chips = '<div class="mtabs" style="margin:-4px 0 14px">' + ctas.map(c => '<button class="mtab' + (c.n === cn ? ' active' : '') + '" data-cta="' + esc(c.n) + '">' + esc(c.n) + '</button>').join('') + '</div>';
@@ -1385,7 +1424,7 @@ function cuyRenderConc(g){
     { id:'est', t:'Conciliación', v:cuyMovEstado, td:m => { const e = cuyMovEstado(m), d = cuyMovDif(m), cs = cuyCompDeMov(m.id), es = CUY_ESP[m.id];
         return '<span class="badge ' + (CUY_EST_BADGE[e] || 'b-gris') + '">' + esc(e) + '</span>'
           + (es ? '<div class="muted">↔ ' + esc(es.cuenta) + ' ' + fmtMon(+es.importe, cuyCta(es.cuenta).mon) + ' · TC ' + fmtTC(cuyTcCambio(m)) + '</div>' : '')
-          + (cs.length ? '<div class="muted">' + cs.map(c => esc(c.serie_numero || c.id)).join(', ') + '</div>' : '')
+          + (cs.length ? '<div class="muted">' + cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); return c ? esc(c.serie_numero || c.id) + ' ' + fmtMon(cuyAplImporte(a), mon) + (cuyCompConc(c) === 'Pago parcial' ? ' (parcial)' : '') : ''; }).join(', ') + '</div>' : '')
           + (e === 'Diferencia' ? '<div class="muted" style="color:#b0584f">' + (isNaN(d) ? 'factura sin TC' : 'dif. ' + fmtMon(d, mon)) + '</div>' : ''); } },
     { id:'as', t:'Asiento', v:m => m.tipo === 'saldo_inicial' ? 'No aplica' : (String(m.asiento_num || '').trim() ? 'Registrado' : 'Pendiente'), td:m => m.tipo === 'saldo_inicial' ? '<span class="muted">—</span>' : esc(m.asiento_num || 'pendiente') },
     { id:'acc', t:'', td:m => SP.editar ? '<div class="row-actions">' + (+m.importe < 0 && m.tipo !== 'gasto_bancario' && m.tipo !== 'saldo_inicial' ? '<button class="btn ghost sm" data-vinc="' + esc(m.id) + '">Facturas</button>' : '')
@@ -1401,6 +1440,8 @@ function cuyRenderConc(g){
     { id:'serie', t:'Serie / N°', s:r => r.serie_numero || '', td:r => esc(r.serie_numero || '—') },
     { id:'conc', t:'Concepto', cls:'wrap', td:r => esc(r.concepto || '') },
     { id:'tot', t:'Total (' + mon + ')', s:r => cuyEnMoneda(r, mon), cls:'num', td:r => { const v = cuyEnMoneda(r, mon); return v == null ? '<span class="badge b-ambar">sin TC</span>' : fmtMon(v, mon); } },
+    { id:'sal', t:'Saldo pendiente', s:r => cuySaldoEn(r, mon, hoyISO()), cls:'num', td:r => { const e = cuyCompConc(r), v = cuySaldoEn(r, mon, hoyISO());
+        return (v == null ? '<span class="badge b-ambar">sin TC</span>' : '<b>' + fmtMon(v, mon) + '</b>') + (e !== 'Sin movimiento' ? '<div class="muted">' + esc(e.toLowerCase()) + '</div>' : ''); } },
     { id:'fpago', t:'Fecha de pago', fecha:r => r.fecha_pago, td:r => fmtFecha(r.fecha_pago) },
   ];
   TABLAS[nsF] = { cols: colsF, base: () => facSinMov };
@@ -1412,8 +1453,8 @@ function cuyRenderConc(g){
     + (movs.length ? tablaHerramientas(nsM, 'Buscar concepto, proveedor, clasificación, FAC…') + (filM.length ? tablaHtml(nsM, colsM, filM, pieM, m => CUY_A_REVISAR.includes(cuyMovEstado(m)) ? 'revisar' : '') : '<div class="empty">Ningún movimiento coincide con los filtros.</div>')
       : '<div class="empty">Todavía no hay movimientos en ' + esc(cn) + (SP.editar ? (ef ? ': cargá el saldo inicial con "Movimiento" y las facturas con "Factura pagada en efectivo".' : ': subí el Excel del banco con "Importar extracto".') : '.') + '</div>')
     + '</div>'
-    + '<div class="card" style="margin-top:16px">' + cardH('Facturas pagadas por ' + cn + ' sin movimiento', 'Comprobantes con Cuenta = ' + esc(cn) + ' y estado PAGADO que no tienen su pago en ' + (ef ? 'la caja' : 'el extracto') + '. Vinculalos desde el movimiento ("Facturas"), o corregí la cuenta / estado del comprobante.')
-    + (facSinMov.length ? tablaHerramientas(nsF, 'Buscar proveedor, serie…') + tablaHtml(nsF, colsF, filF, '', () => 'revisar') : '<div class="empty">✓ Todas las facturas pagadas por esta cuenta tienen su movimiento.</div>')
+    + '<div class="card" style="margin-top:16px">' + cardH('Facturas pagadas por ' + cn + ' con saldo sin movimiento', 'Comprobantes de esta cuenta marcados pagados que no tienen su pago (o lo tienen en parte) en ' + (ef ? 'la caja' : 'el extracto') + '. Vinculalos desde el movimiento ("Facturas") indicando cuánto aplica cada pago, o corregí la cuenta / estado del comprobante.')
+    + (facSinMov.length ? tablaHerramientas(nsF, 'Buscar proveedor, serie…') + tablaHtml(nsF, colsF, filF, '', () => 'revisar') : '<div class="empty">✓ Todas las facturas pagadas por esta cuenta tienen su(s) pago(s) por el total.</div>')
     + '</div>';
   tablaEventos(); cuyTabsEventos();
   $main.querySelectorAll('[data-cta]').forEach(b => b.addEventListener('click', () => { CUY.ctaSel[g] = b.dataset.cta; cuyRender(); }));
@@ -1469,51 +1510,81 @@ async function cuyGuardarCierre(cn, mes, valor){
 }
 
 /* ---------- Vincular facturas con un movimiento ---------- */
-async function cuyCompVincular(r, m){
-  const c = { movimiento_id: m ? m.id : null };
-  if (m) {   // completar lo que falte del pago, sin pisar lo cargado
-    if (!r.cuenta) c.cuenta = m.cuenta;
-    if (!r.fecha_pago) c.fecha_pago = m.fecha;
-    if (!r.estado_pago || String(r.estado_pago).toUpperCase() === 'PENDIENTE') c.estado_pago = 'PAGADO';
+// Guarda (o borra, con importe null) lo aplicado de un movimiento a una factura, y completa los datos de pago de la factura
+async function cuyAplGuardar(m, r, importe){
+  const ya = CUY.apl.find(a => a.movimiento_id === m.id && a.comprobante_id === r.id);
+  if (importe == null) {
+    if (!ya) return;
+    const { error } = await sb.from(CUY_APL_T).delete().eq('id', ya.id); if (error) throw error;
+    CUY.apl = CUY.apl.filter(a => a.id !== ya.id);
+  } else {
+    const q = ya ? sb.from(CUY_APL_T).update({ importe }).eq('id', ya.id) : sb.from(CUY_APL_T).insert({ movimiento_id: m.id, comprobante_id: r.id, importe });
+    const { data, error } = await q.select(); if (error) throw error; if (!data || !data.length) throw new Error('No se guardó: sin permiso de edición.');
+    if (ya) CUY.apl[CUY.apl.indexOf(ya)] = data[0]; else CUY.apl.push(data[0]);
   }
-  return cuyUpdate(r.id, c);
+  // completar lo que falte del pago, sin pisar lo cargado; estado según el saldo
+  const c = {}, sal = cuySaldoFac(r), est = String(r.estado_pago || '').toUpperCase();
+  if (importe != null && !r.cuenta) c.cuenta = m.cuenta;
+  if (importe != null && (!r.fecha_pago || r.fecha_pago < m.fecha)) c.fecha_pago = m.fecha;   // fecha del último pago
+  if (cuyAplDeComp(r.id).length && sal != null && ['', 'PENDIENTE', 'PARCIAL', 'PAGADO'].includes(est)) c.estado_pago = Math.abs(sal) <= 0.01 ? 'PAGADO' : 'PARCIAL';
+  if (Object.keys(c).length) await cuyUpdate(r.id, c);
 }
 function cuyVincular(mid){
   const m = CUY.movs.find(x => x.id === mid); if (!m) return;
   const mon = cuyCta(m.cuenta).mon, objetivo = -(+m.importe);
-  const cands = CUY.lista.filter(r => r.movimiento_id === mid || (!r.movimiento_id && !r.anulada && (!r.cuenta || r.cuenta === m.cuenta)))
-    .map(r => ({ r, v: cuyEnMoneda(r, mon) }))
-    .sort((a,b) => (b.r.movimiento_id === mid) - (a.r.movimiento_id === mid) || Math.abs((a.v ?? 1e15) - objetivo) - Math.abs((b.v ?? 1e15) - objetivo));
-  const filas = cands.map(({ r, v }) => '<label style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid var(--line);font-size:12.5px;cursor:pointer">'
-    + '<input type="checkbox" class="vc-chk" value="' + esc(r.id) + '" data-v="' + (v == null ? '' : v) + '"' + (r.movimiento_id === mid ? ' checked' : '') + (v == null ? ' disabled' : '') + '>'
-    + '<span style="flex:1"><b>' + esc(r.proveedor || '') + '</b> · ' + esc(r.serie_numero || r.id) + ' · ' + fmtFecha(r.fecha) + '<span class="muted"> ' + esc(r.cuenta || 'sin cuenta') + (r.fecha_pago ? ' · pago ' + fmtFecha(r.fecha_pago) : '') + '</span></span>'
-    + '<span class="num" style="white-space:nowrap">' + (v == null ? '<span class="badge b-ambar">sin TC</span>' : fmtMon(v, mon)) + '</span></label>').join('');
+  const aplDe = r => CUY.apl.find(a => a.movimiento_id === mid && a.comprobante_id === r.id);
+  // Candidatas: las ya aplicadas a este pago y las que tienen saldo pendiente (de esta cuenta o sin cuenta)
+  const cands = CUY.lista.filter(r => aplDe(r) || (!r.anulada && (!r.cuenta || r.cuenta === m.cuenta) && ['Sin movimiento','No pagada','Pago parcial'].includes(cuyCompConc(r))))
+    .map(r => { const a = aplDe(r), sal = cuySaldoEn(r, mon, m.fecha);
+      return { r, a, ya: a ? cuyAplImporte(a) : null, disp: sal == null ? null : r2(sal + (a ? cuyAplImporte(a) || 0 : 0)) }; })   // disponible para este pago = saldo + lo que ya le aplica este pago
+    .sort((x,y) => (!!y.a - !!x.a) || Math.abs((x.disp ?? 1e15) - objetivo) - Math.abs((y.disp ?? 1e15) - objetivo));
+  const filas = cands.map(({ r, a, ya, disp }, i) => '<div style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid var(--line);font-size:12.5px">'
+    + '<input type="checkbox" class="vc-chk" data-i="' + i + '"' + (a ? ' checked' : '') + (disp == null ? ' disabled' : '') + '>'
+    + '<span style="flex:1"><b>' + esc(r.proveedor || '') + '</b> · ' + esc(r.serie_numero || r.id) + ' · ' + fmtFecha(r.fecha)
+    +   '<span class="muted"> total ' + fmtMon(cuyFacTotal(r), cuyEsUSD(r) ? 'USD' : 'UYU') + (cuyCompConc(r) === 'Pago parcial' || (a && cuyAplDeComp(r.id).length > 1) ? ' · pendiente ' + fmtMon(disp, mon) + ' (pago parcial)' : '') + '</span></span>'
+    + (disp == null ? '<span class="badge b-ambar">sin TC</span>' : '<input class="tc-in vc-imp" data-i="' + i + '" type="number" step="0.01" value="' + esc(ya == null ? '' : ya) + '" placeholder="' + esc(disp) + '" title="Cuánto de este pago se aplica a esta factura (' + mon + ')">')
+    + '</div>').join('');
   abrirModal('Facturas del movimiento',
     '<div class="kv"><b>' + esc(m.concepto || '') + '</b><br>' + esc(m.cuenta) + ' · ' + fmtFecha(m.fecha) + ' · ' + fmtMon(+m.importe, mon) + '</div>'
-    + '<div class="box"><h4>Elegí la(s) factura(s) que paga este movimiento</h4><div class="hist" style="max-height:320px">' + (filas || '<div class="muted">No hay facturas sin vincular de esta cuenta.</div>') + '</div>'
+    + '<div class="box"><h4>Tildá la(s) factura(s) que paga este movimiento y cuánto aplica a cada una (' + mon + ')</h4>'
+    + '<div class="muted" style="margin-bottom:6px">Si la factura se pagó en varias veces, aplicá acá solo la parte de este pago: queda el saldo pendiente para el próximo.</div>'
+    + '<div class="hist" style="max-height:320px">' + (filas || '<div class="muted">No hay facturas con saldo pendiente de esta cuenta.</div>') + '</div>'
     + '<div class="kv" style="margin-top:8px" id="vc-sum"></div></div><div class="err" id="vc-err"></div>',
     '<button class="btn ghost" id="vc-no">Cancelar</button><button class="btn" id="vc-ok">Guardar</button>', 'wide');
-  const sum = () => { const s = r2([...document.querySelectorAll('.vc-chk')].filter(c => c.checked).reduce((a,c) => a + (+c.dataset.v || 0), 0)), d = r2(objetivo - s);
-    document.getElementById('vc-sum').innerHTML = 'Facturas elegidas: <b>' + fmtMon(s, mon) + '</b> · movimiento: <b>' + fmtMon(objetivo, mon) + '</b> · '
-      + (Math.abs(d) <= 0.01 ? '<span style="color:#4f8a53">✓ coincide</span>' : '<span style="color:#b3853a">diferencia ' + fmtMon(d, mon) + '</span>'); };
-  document.querySelectorAll('.vc-chk').forEach(c => c.addEventListener('change', sum)); sum();
+  const chks = [...document.querySelectorAll('.vc-chk')], imps = i => document.querySelector('.vc-imp[data-i="' + i + '"]');
+  const val = i => { const e = imps(i); return e && e.value !== '' ? +e.value : null; };
+  const sum = () => { const s = r2(chks.filter(c => c.checked).reduce((a,c) => a + (val(c.dataset.i) || 0), 0)), d = r2(objetivo - s);
+    document.getElementById('vc-sum').innerHTML = 'Aplicado: <b>' + fmtMon(s, mon) + '</b> · movimiento: <b>' + fmtMon(objetivo, mon) + '</b> · '
+      + (Math.abs(d) <= 0.01 ? '<span style="color:#4f8a53">✓ coincide</span>' : '<span style="color:#b3853a">falta aplicar ' + fmtMon(d, mon) + '</span>'); };
+  // Al tildar: propone lo que falta aplicar del movimiento, sin pasar el saldo de la factura
+  chks.forEach(c => c.addEventListener('change', () => { const i = c.dataset.i, e = imps(i);
+    if (c.checked && e && e.value === '') { const resto = r2(objetivo - chks.filter(x => x.checked && x !== c).reduce((a,x) => a + (val(x.dataset.i) || 0), 0));
+      e.value = Math.max(0, Math.min(cands[i].disp, resto)); }
+    if (!c.checked && e) e.value = ''; sum(); }));
+  document.querySelectorAll('.vc-imp').forEach(e => e.addEventListener('input', () => { const c = chks.find(x => x.dataset.i === e.dataset.i); if (c) c.checked = e.value !== '' && +e.value !== 0; sum(); }));
+  sum();
   document.getElementById('vc-no').addEventListener('click', cerrarModal);
   document.getElementById('vc-ok').addEventListener('click', async () => {
-    const elegidas = new Set([...document.querySelectorAll('.vc-chk')].filter(c => c.checked).map(c => c.value));
+    const err = document.getElementById('vc-err'); err.textContent = '';
+    for (const c of chks) { const i = +c.dataset.i, v = val(i); if (c.checked && cands[i].disp != null && v != null && v > cands[i].disp + 0.01 && cands[i].disp > 0) { err.textContent = 'A ' + (cands[i].r.serie_numero || cands[i].r.id) + ' le estás aplicando más que su saldo pendiente (' + fmtMon(cands[i].disp, mon) + ').'; return; } }
     try {
-      for (const { r } of cands) { const ya = r.movimiento_id === mid, quiere = elegidas.has(r.id); if (ya !== quiere) await cuyCompVincular(r, quiere ? m : null); }
+      for (const c of chks) { const i = +c.dataset.i, v = c.checked ? val(i) : null, x = cands[i];
+        if ((x.ya == null && v == null) || (x.ya != null && v != null && r2(x.ya) === r2(v) && cuyNum(x.a.importe) != null)) continue;
+        await cuyAplGuardar(m, x.r, v == null || v === 0 ? null : r2(v)); }
       cerrarModal(); toast('Conciliación guardada'); cuyRender();
-    } catch (e) { document.getElementById('vc-err').textContent = 'Error: ' + (e.message || e); }
+    } catch (e) { err.textContent = 'Error: ' + (e.message || e); }
   });
 }
 // Automático: un pago sin factura ↔ una factura sin movimiento, mismo importe exacto y fecha cercana, sin ambigüedad
 function cuyAutoConc(cn){
   const mon = cuyCta(cn).mon, dias = (a,b) => Math.abs((new Date(a) - new Date(b)) / 864e5);
   const movs = cuyMovsDe(cn).filter(m => +m.importe < 0 && (m.tipo === 'pago' || m.tipo === 'otro') && !cuyCompDeMov(m.id).length);
-  const libres = CUY.lista.filter(r => !r.movimiento_id && !r.anulada && (r.cuenta === cn || (!r.cuenta && (cuyEsUSD(r) ? 'USD' : 'UYU') === mon)));
+  // Facturas con saldo pendiente (sin pagos o con pago parcial): el pago tiene que coincidir con el SALDO, no con el total
+  const libres = CUY.lista.filter(r => !r.anulada && ['Sin movimiento','No pagada','Pago parcial'].includes(cuyCompConc(r)) && (r.cuenta === cn || (!r.cuenta && (cuyEsUSD(r) ? 'USD' : 'UYU') === mon)));
   const prop = [];
   movs.forEach(m => {
-    let c = libres.filter(r => { const v = cuyEnMoneda(r, mon); if (v == null || Math.abs(v + (+m.importe)) > 0.01) return false;
+    let c = libres.filter(r => { const v = cuySaldoEn(r, mon, m.fecha); if (v == null || Math.abs(v + (+m.importe)) > 0.01) return false;
+      if (cuyCompConc(r) === 'Pago parcial') return dias(r.fecha, m.fecha) <= 180;   // segundo pago: la fecha de pago ya es la del primero
       return r.fecha_pago ? dias(r.fecha_pago, m.fecha) <= 7 : dias(r.fecha, m.fecha) <= 90; });
     if (c.length > 1) { const ex = c.filter(r => r.fecha_pago === m.fecha); if (ex.length === 1) c = ex; }
     if (c.length === 1) prop.push({ m, r: c[0] });
@@ -1522,13 +1593,13 @@ function cuyAutoConc(cn){
   const ok = prop.filter(p => usos[p.r.id] === 1);
   if (!ok.length) { toast('No encontré pares sin ambigüedad (mismo importe y fecha cercana). Vinculá a mano con "Facturas".'); return; }
   abrirModal('Conciliar automático · ' + cn,
-    '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52">Pares con el mismo importe exacto y fecha cercana (±7 días de la fecha de pago, o ±90 de la fecha de factura si no tiene fecha de pago). Revisalos antes de confirmar.</p><div class="hist" style="max-height:360px">'
-    + ok.map(p => '<div class="it">' + fmtFecha(p.m.fecha) + ' · ' + esc(p.m.concepto || '') + ' · <b>' + fmtMon(+p.m.importe, mon) + '</b><br><span class="muted">↔ ' + esc(p.r.proveedor || '') + ' ' + esc(p.r.serie_numero || p.r.id) + ' · ' + fmtFecha(p.r.fecha) + '</span></div>').join('')
+    '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52">Pares en que el pago es igual al saldo pendiente de la factura y la fecha es cercana (±7 días de la fecha de pago, o ±90 de la fecha de factura si no tiene; si ya tiene un pago parcial, hasta 180 días). Revisalos antes de confirmar.</p><div class="hist" style="max-height:360px">'
+    + ok.map(p => '<div class="it">' + fmtFecha(p.m.fecha) + ' · ' + esc(p.m.concepto || '') + ' · <b>' + fmtMon(+p.m.importe, mon) + '</b><br><span class="muted">↔ ' + esc(p.r.proveedor || '') + ' ' + esc(p.r.serie_numero || p.r.id) + ' · ' + fmtFecha(p.r.fecha) + (cuyCompConc(p.r) === 'Pago parcial' ? ' · cancela el saldo pendiente' : '') + '</span></div>').join('')
     + '</div><div class="err" id="ac-err"></div>',
     '<button class="btn ghost" id="ac-no">Cancelar</button><button class="btn" id="ac-si">Conciliar ' + ok.length + '</button>', 'wide');
   document.getElementById('ac-no').addEventListener('click', cerrarModal);
   document.getElementById('ac-si').addEventListener('click', async () => {
-    try { for (const p of ok) await cuyCompVincular(p.r, p.m); cerrarModal(); toast(ok.length + ' movimientos conciliados'); cuyRender(); }
+    try { for (const p of ok) await cuyAplGuardar(p.m, p.r, r2(-(+p.m.importe))); cerrarModal(); toast(ok.length + ' movimientos conciliados'); cuyRender(); }
     catch (e) { document.getElementById('ac-err').textContent = 'Error: ' + (e.message || e); }
   });
 }
@@ -1581,13 +1652,13 @@ async function cuyMovBorrarDB(id){
   const { data, error } = await sb.from(CUY_MOV_T).delete().eq('id', id).select();
   if (error || !data || !data.length) throw new Error((error && error.message) || 'sin permiso de edición.');
   CUY.movs = CUY.movs.filter(x => x.id !== id);
-  CUY.lista.forEach(r => { if (r.movimiento_id === id) r.movimiento_id = null; });   // la base lo hace sola (on delete set null)
+  CUY.apl = CUY.apl.filter(a => a.movimiento_id !== id);   // la base las borra sola (on delete cascade)
 }
 function cuyMovBorrar(id){
   const m = CUY.movs.find(x => x.id === id); if (!m) return;
   const cs = cuyCompDeMov(id);
   abrirModal('Eliminar movimiento', '<p style="margin:0;font-size:14px;color:#5f5c52;line-height:1.5">Se borra el movimiento <b>' + esc(m.concepto || '') + '</b> del ' + fmtFecha(m.fecha) + ' (' + fmtMon(+m.importe, cuyCta(m.cuenta).mon) + ')'
-      + (cs.length ? ' y se desvinculan ' + cs.length + ' factura(s), que quedan sin conciliar' : '') + '. No se puede deshacer. ¿Confirmás?</p><div class="err" id="md-err"></div>',
+      + (cs.length ? ' y se desvinculan ' + cs.length + ' factura(s), que vuelven a tener ese saldo pendiente' : '') + '. No se puede deshacer. ¿Confirmás?</p><div class="err" id="md-err"></div>',
     '<button class="btn ghost" id="md-no">Cancelar</button><button class="btn danger" id="md-si">Eliminar</button>');
   document.getElementById('md-no').addEventListener('click', cerrarModal);
   document.getElementById('md-si').addEventListener('click', async () => {
@@ -1605,14 +1676,17 @@ async function cuyEfectivoAuto(r){
   const fila = { cuenta: cta.n, fecha: r.fecha_pago || r.fecha, importe: -monto, tc: cuyNum(r.tc), concepto: cuyLey([r.proveedor, r.serie_numero, r.concepto]),
     tipo:'pago', rubro: r.rubro, periodo: r.periodo, proveedor: r.proveedor, proveedor_cod: r.proveedor_cod, fac: r.serie_numero };
   try {
-    const m = r.movimiento_id && CUY.movs.find(x => x.id === r.movimiento_id);
-    if (m) {
-      if (m.origen !== 'factura_efectivo' || cuyCompDeMov(m.id).length !== 1) return '';
+    const apls = cuyAplDeComp(r.id), m = apls.length && CUY.movs.find(x => x.id === apls[0].movimiento_id);
+    if (apls.length) {
+      if (apls.length !== 1 || !m || m.origen !== 'factura_efectivo' || cuyAplDeMov(m.id).length !== 1) return '';
       if (m.cuenta === fila.cuenta && m.fecha === fila.fecha && r2(m.importe) === r2(fila.importe)) return '';
-      await cuyMovGuardar(m.id, fila); return ' · movimiento de caja actualizado';
+      await cuyMovGuardar(m.id, fila);
+      const a = apls[0]; const { data } = await sb.from(CUY_APL_T).update({ importe: monto }).eq('id', a.id).select(); if (data && data[0]) CUY.apl[CUY.apl.indexOf(a)] = data[0];
+      return ' · movimiento de caja actualizado';
     }
     const nuevo = await cuyMovGuardar(null, Object.assign(fila, { origen:'factura_efectivo' }));
-    await cuyUpdate(r.id, { movimiento_id: nuevo.id });
+    const { data, error } = await sb.from(CUY_APL_T).insert({ movimiento_id: nuevo.id, comprobante_id: r.id, importe: monto }).select();
+    if (error) throw error; if (data && data[0]) CUY.apl.push(data[0]);
     return ' · movimiento de caja generado';
   } catch (e) { return ' · ⚠ no se generó el movimiento de caja: ' + (e.message || e); }
 }
@@ -1716,15 +1790,16 @@ function cuyConcExportar(cn){
   const hm = movs.map(m => { acc = r2(acc + (+m.importe || 0)); const d = cuyMovDif(m);
     return { 'Fecha': m.fecha, 'Tipo': CUY_TIPOS_MOV[m.tipo] || m.tipo, 'Concepto': m.concepto || '', 'Clasificación': m.clasificacion || '', 'Rubro': m.rubro || '', 'Auxiliar': m.auxiliar || '',
       'Proveedor': m.proveedor || '', ['Importe ' + mon]: +m.importe, ['Saldo ' + mon]: acc, 'Conciliación': cuyMovEstado(m), 'Diferencia': (d == null || isNaN(d)) ? null : d,
-      'Facturas': cuyCompDeMov(m.id).map(c => (c.proveedor || '') + ' ' + (c.serie_numero || c.id)).join(' / '), 'N° asiento': m.asiento_num || '', 'Comentarios': m.comentarios || '' }; });
-  const hf = CUY.lista.filter(r => r.cuenta === cn && cuyCompConc(r) === 'Sin movimiento')
-    .map(r => ({ 'Fecha': r.fecha, 'Proveedor': r.proveedor || '', 'Serie / N°': r.serie_numero || '', 'Concepto': r.concepto || '', ['Total ' + mon]: cuyEnMoneda(r, mon), 'Fecha de pago': r.fecha_pago || '' }));
+      'Facturas': cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); return c ? (c.proveedor || '') + ' ' + (c.serie_numero || c.id) + ' ' + fmtNum(cuyAplImporte(a)) : ''; }).join(' / '), 'N° asiento': m.asiento_num || '', 'Comentarios': m.comentarios || '' }; });
+  const hf = CUY.lista.filter(r => r.cuenta === cn && ['Sin movimiento','Pago parcial','Pagado de más'].includes(cuyCompConc(r)))
+    .map(r => ({ 'Fecha': r.fecha, 'Proveedor': r.proveedor || '', 'Serie / N°': r.serie_numero || '', 'Concepto': r.concepto || '', ['Total ' + mon]: cuyEnMoneda(r, mon),
+      ['Saldo pendiente ' + mon]: cuySaldoEn(r, mon, hoyISO()), 'Estado': cuyCompConc(r), 'Fecha de pago': r.fecha_pago || '' }));
   const cies = cuyCierresDe(cn, movs).map(c => ({ 'Mes': c.mes, 'Saldo inicial': c.ini, 'Ingresos': c.ing, 'Egresos': c.egr, 'Saldo libros': c.fin,
     [cuyEsEfectivo(cn) ? 'Arqueo' : 'Saldo extracto']: c.ext, 'Diferencia': c.dif, 'Movimientos sin justificar': c.pend }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cies.length ? cies : [{ 'Mes':'(sin movimientos)' }]), 'Cierres');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hm), 'Movimientos');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hf.length ? hf : [{ 'Fecha':'', 'Proveedor':'(ninguna)' }]), 'Facturas sin movimiento');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hf.length ? hf : [{ 'Fecha':'', 'Proveedor':'(ninguna)' }]), 'Facturas con saldo');
   XLSX.writeFile(wb, 'Conciliacion_' + cn.replace(/\s+/g,'_') + '_' + hoyISO() + '.xlsx');
 }
 
@@ -1757,7 +1832,12 @@ function cuyAsientoMov(m){
   const comps = cuyCompDeMov(m.id), lineas = [];
   if (comps.length) {
     // Pago de facturas: Proveedores se cancela al valor con que se registró cada factura
-    const vals = comps.map(c => { const v = cuyFacValor(c, ma); if (v == null) cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); return v; });
+    // parte de cada factura que cancela este pago (aplicado ÷ total) × valor con que se registró la factura
+    const vals = cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); if (!c) return 0;
+      const v = cuyFacValor(c, ma), ap = cuyAplEnOrigen(a), tot = cuyFacTotal(c);
+      if (v == null) { cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); return null; }
+      if (ap == null) { falta.push('UYU/USD para pasar el pago a la moneda de la factura ' + (c.serie_numero || c.id)); return null; }
+      return tot ? r2(v * ap / tot) : 0; });
     const suma = vals.some(v => v == null) ? null : r2(vals.reduce((a,v) => a + v, 0));
     lineas.push({ clave:'PROVEEDORES', monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley });
   } else if (CUY_ESP[m.id] && ma === 'ARS') {
