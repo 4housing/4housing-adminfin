@@ -1216,6 +1216,7 @@ const CUY_PLAN_DEF = {
   'MONEDA:USD':             { codigo:'DOL' },
   'CONFIG:COT_DIA':         { codigo:'anterior' },
   'CONFIG:ARS_AUTO':        { codigo:'venta' },
+  'CONFIG:CAMBIO_TC':       { codigo:'banco' },
 };
 function cuyPlan(k){
   if (String(k).startsWith('COD:')) { const cod = k.slice(4), c = CUY.dic.cuentas.find(x => x.cod === cod); return { codigo: cod, nombre: c ? c.desc : '' }; }
@@ -1871,16 +1872,19 @@ function cuyContraMov(m){
   if (String(m.contrapartida || '').trim()) return 'COD:' + String(m.contrapartida).trim();
   return m.tipo === 'gasto_bancario' ? 'CLASIF:GASTOS BANCARIOS' : cuyClaveClasif(m.clasificacion);
 }
-// Cambio de moneda: UN asiento por par, en DOL (la cuenta en dólares conserva sus US$). Debe/Haber las dos cuentas del
-// Santander; los pesos se pasan a dólares con la cotización UYU/USD (DGI): lo que no cierra es diferencia de cambio
-// (TC del banco vs. oficial). El asiento se identifica con el movimiento de la cuenta en dólares.
+// Cambio de moneda: UN asiento por par, en DOL (la cuenta en dólares conserva sus US$), Debe/Haber las dos cuentas del Santander.
+// TC (Cotizaciones, CONFIG:CAMBIO_TC): 'banco' (por defecto) = el que aplicó el banco: la pata en pesos vale lo mismo que la
+// de dólares y no hay diferencia de cambio en el asiento (la diferencia con el oficial aparece al revaluar el saldo al cierre);
+// 'oficial' = los pesos a dólares con UYU/USD DGI y lo que no cierra va a diferencia de cambio.
+// El asiento se identifica con el movimiento de la cuenta en dólares.
+const cuyCambioTc = () => cuyPlan('CONFIG:CAMBIO_TC').codigo === 'oficial' ? 'oficial' : 'banco';
 function cuyAsientoCambio(m){
-  const e = CUY_ESP[m.id], usd = cuyCta(m.cuenta).mon === 'USD' ? m : e, uyu = usd === m ? e : m;
-  const vUyu = cuyConv(+uyu.importe, 'UYU', 'USD', uyu.fecha), ley = cuyLey(['Cambio de moneda', 'US$ ' + fmtNum(Math.abs(+usd.importe)), '$U ' + fmtNum(Math.abs(+uyu.importe))]);
+  const e = CUY_ESP[m.id], usd = cuyCta(m.cuenta).mon === 'USD' ? m : e, uyu = usd === m ? e : m, banco = cuyCambioTc() === 'banco';
+  const vUyu = banco ? r2(-(+usd.importe)) : cuyConv(+uyu.importe, 'UYU', 'USD', uyu.fecha), ley = cuyLey(['Cambio de moneda', 'US$ ' + fmtNum(Math.abs(+usd.importe)), '$U ' + fmtNum(Math.abs(+uyu.importe)), 'TC ' + fmtTC(Math.abs(+uyu.importe) / Math.abs(+usd.importe))]);
   const lineas = [{ clave: 'CUENTA:' + usd.cuenta, monto: r2(+usd.importe), leyenda: ley }, { clave: 'CUENTA:' + uyu.cuenta, monto: vUyu, leyenda: ley }];
   if (vUyu != null) { const resto = r2(-lineas.reduce((a,l) => a + l.monto, 0));
     if (Math.abs(resto) >= 0.01) lineas.push({ clave: resto > 0 ? 'DIF_CAMBIO_NEG' : 'DIF_CAMBIO_POS', monto: resto, leyenda: cuyLey(['Dif. de cambio', ley]), eerr: '' }); }
-  return { id: usd.id, par: [usd.id, uyu.id], fecha: usd.fecha, mon: 'USD', cot: cuyCotDe(usd.fecha, 'ars_usd'), falta: cuyFaltaCot(uyu.fecha, 'UYU'),
+  return { id: usd.id, par: [usd.id, uyu.id], fecha: usd.fecha, mon: 'USD', cot: cuyCotDe(usd.fecha, 'ars_usd'), falta: cuyFaltaCot(uyu.fecha, banco ? 'USD' : 'UYU'),
            concepto: cuyLey(['Cambio de moneda', usd.cuenta + ' / ' + uyu.cuenta]), lineas };
 }
 function cuyAsientoMov(m){
@@ -2079,6 +2083,10 @@ function cuyRenderCot(){
     +     '<option value="venta"' + (cuyArsAuto() === 'venta' ? ' selected' : '') + '>índice USD Oficial, vendedor</option>'
     +     '<option value="compra"' + (cuyArsAuto() === 'compra' ? ' selected' : '') + '>índice USD Oficial, comprador</option>'
     +     '<option value="no"' + (cuyArsAuto() === 'no' ? ' selected' : '') + '>no, solo lo cargado acá</option></select>'
+    +   '<span style="font-size:12px;color:var(--muted)">Cambios de moneda:</span>'
+    +   '<select id="ct-camtc" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
+    +     '<option value="banco"' + (cuyCambioTc() === 'banco' ? ' selected' : '') + '>al TC del banco (sin dif. de cambio)</option>'
+    +     '<option value="oficial"' + (cuyCambioTc() === 'oficial' ? ' selected' : '') + '>al oficial DGI (con dif. de cambio)</option></select>'
     +   '<span style="font-size:12px;color:var(--muted)">Cotización para cada movimiento:</span>'
     +   '<select id="ct-modo" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
     +     '<option value="anterior"' + (cuyCotModo() === 'anterior' ? ' selected' : '') + '>la del día hábil anterior (cierre)</option>'
@@ -2098,6 +2106,8 @@ function cuyRenderCot(){
   on('ct-add', async () => { const f = document.getElementById('ct-nf').value; if (!f) { toast('Elegí la fecha'); return; }
     try { await cuyCotGuardar(f, {}); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas); on('ct-imp', cuyCotImportar);
+  const ct = document.getElementById('ct-camtc');
+  if (ct) ct.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:CAMBIO_TC', { codigo: ct.value, nombre: 'TC de los cambios de moneda' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const ao = document.getElementById('ct-ars');
   if (ao) ao.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_AUTO', { codigo: ao.value, nombre: 'ARS/USD automático desde el índice USD Oficial' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const md = document.getElementById('ct-modo');
