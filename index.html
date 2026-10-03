@@ -1215,6 +1215,7 @@ const CUY_PLAN_DEF = {
   'MONEDA:ARS':             { codigo:'PES' },
   'MONEDA:USD':             { codigo:'DOL' },
   'CONFIG:COT_DIA':         { codigo:'anterior' },
+  'CONFIG:ARS_AUTO':        { codigo:'venta' },
 };
 function cuyPlan(k){
   const d = CUY_PLAN_DEF[k] || {}, p = CUY.plan[k] || {}, out = Object.assign({}, d);
@@ -1247,15 +1248,31 @@ async function cuyCargarCot(){
     CUY.cierres = {}; cies.forEach(c => { CUY.cierres[c.cuenta + '|' + c.mes] = c; });
     CUY.cotErr = '';
   } catch (e) { CUY.cots = []; CUY.cierres = {}; CUY.cotErr = e.message || String(e); }
+  // Índice ARS/USD automático: USD Oficial día a día del diccionario de Compras (compras_usd_diario_oficial,
+  // el mismo que usa EERR). Lectura para adminfin: sql/2026-10_contabilidad_uy_usd_oficial.sql. Si no se puede leer, queda solo lo propio.
+  try { CUY.ofic = (await selTodo('compras_usd_diario_oficial', 'fecha, compra, venta, fuente', 'fecha')).sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))); CUY.oficErr = ''; }
+  catch (e) { CUY.ofic = []; CUY.oficErr = e.message || String(e); }
 }
+// ARS/USD automático desde el índice USD Oficial: 'venta' (por defecto) | 'compra' | 'no' (solo lo cargado acá)
+const cuyArsAuto = () => { const v = cuyPlan('CONFIG:ARS_AUTO').codigo; return ['venta','compra','no'].includes(v) ? v : 'venta'; };
+// Serie efectiva de cada cotización: lo cargado en Cotizaciones manda; el ARS/USD que falte sale del índice USD Oficial
+function cuySerie(campo){
+  const propias = CUY.cots.filter(c => cuyNum(c[campo]) != null).map(c => ({ fecha: String(c.fecha), v: +c[campo], fuente: c[campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu'] || '' }));
+  if (campo !== 'ars_usd' || cuyArsAuto() === 'no' || !(CUY.ofic || []).length) return propias;
+  const lado = cuyArsAuto(), ya = new Set(propias.map(x => x.fecha));
+  const auto = CUY.ofic.filter(o => !ya.has(String(o.fecha)) && cuyNum(o[lado]) > 0).map(o => ({ fecha: String(o.fecha), v: +o[lado], fuente: 'índice USD Oficial (' + (lado === 'venta' ? 'vendedor' : 'comprador') + ')', auto: true }));
+  return propias.concat(auto).sort((a,b) => a.fecha.localeCompare(b.fecha));
+}
+let CUY_SERIE = { ars_usd: [], uyu_usd: [] };
+const cuySerieArmar = () => { CUY_SERIE = { ars_usd: cuySerie('ars_usd'), uyu_usd: cuySerie('uyu_usd') }; };
 // { v, fecha } de la cotización vigente para esa fecha (la del día o la última anterior), o null
 // Criterio (Plan de cuentas, clave CONFIG:COT_DIA): 'anterior' = la del último día hábil ANTERIOR a la fecha
 // (cierre del día anterior, propuesto para UY y AR — a confirmar con los contadores); 'mismo' = la del día o la última anterior.
 const cuyCotModo = () => cuyPlan('CONFIG:COT_DIA').codigo === 'mismo' ? 'mismo' : 'anterior';
 function cuyCotDe(fecha, campo){
   let best = null; const f = String(fecha || ''), ant = cuyCotModo() === 'anterior';
-  for (const c of CUY.cots) { const cf = String(c.fecha); if (ant ? cf >= f : cf > f) break; if (cuyNum(c[campo]) != null) best = c; }
-  return best ? { v: +best[campo], fecha: best.fecha } : null;
+  for (const c of (CUY_SERIE[campo] || [])) { if (ant ? c.fecha >= f : c.fecha > f) break; best = c; }
+  return best ? { v: best.v, fecha: best.fecha, fuente: best.fuente, auto: !!best.auto } : null;
 }
 // Convierte un importe entre monedas con las cotizaciones de esa fecha. de: USD|UYU · a: USD|ARS. null si falta cotización.
 function cuyConv(v, de, a, fecha){
@@ -1361,7 +1378,7 @@ function cuyTabs(){
 }
 function cuyTabsEventos(){ $main.querySelectorAll('[data-cuytab]').forEach(b => b.addEventListener('click', () => { CUY.tab = b.dataset.cuytab; cuyRender(); })); }
 function cuyRender(){
-  CUY_ESP = cuyEspejos();
+  CUY_ESP = cuyEspejos(); cuySerieArmar();
   if (CUY.tab === 'comp') return cuyRenderComp();
   document.getElementById('topActions').innerHTML = '';
   if (CUY.movErr) {
@@ -1992,11 +2009,11 @@ async function cuyCotGuardar(fecha, cambios){
   const { data, error } = await sb.from(CUY_COT_T).upsert(Object.assign({ fecha }, cambios), { onConflict:'fecha' }).select();
   if (error) throw error; if (!data || !data.length) throw new Error('sin permiso de edición.');
   const i = CUY.cots.findIndex(c => c.fecha === fecha); if (i >= 0) CUY.cots[i] = data[0]; else CUY.cots.push(data[0]);
-  CUY.cots.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)));
+  CUY.cots.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))); cuySerieArmar();
 }
 function cuyRenderCot(){
   const ta = document.getElementById('topActions');
-  ta.innerHTML = SP.editar && !CUY.cotErr ? '<button class="btn" id="ct-imp">' + ICO.upload + 'Importar cotizaciones</button><button class="btn ghost" id="ct-ofic">ARS/USD del diccionario (USD Oficial)</button><button class="btn ghost" id="ct-api">Traer UYU/USD de hoy (dolarapi)</button><button class="btn ghost" id="ct-camb">Completar UYU/USD con los cambios del banco</button><button class="btn ghost" id="ct-tc">Completar TC de facturas USD</button>' : '';
+  ta.innerHTML = SP.editar && !CUY.cotErr ? '<button class="btn" id="ct-imp">' + ICO.upload + 'Importar cotizaciones</button><button class="btn ghost" id="ct-api">Traer UYU/USD de hoy (dolarapi)</button><button class="btn ghost" id="ct-camb">Completar UYU/USD con los cambios del banco</button><button class="btn ghost" id="ct-tc">Completar TC de facturas USD</button>' : '';
   if (CUY.cotErr) { $main.innerHTML = cuyTabs() + '<div class="card"><div class="empty">No pude leer las cotizaciones: ' + esc(CUY.cotErr) + '<br><span class="muted">Falta correr sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql en Supabase.</span></div></div>'; cuyTabsEventos(); return; }
   // Una fila por fecha cargada o usada por una factura / movimiento
   const usos = {}; CUY.lista.forEach(r => { if (r.fecha) usos[r.fecha] = (usos[r.fecha] || 0) + 1; }); CUY.movs.forEach(m => { if (m.tipo !== 'saldo_inicial') usos[m.fecha] = (usos[m.fecha] || 0) + 1; });
@@ -2012,8 +2029,9 @@ function cuyRenderCot(){
   const inp = (x, campo) => SP.editar ? '<input class="tc-in" type="number" step="0.0001" min="0" data-cot="' + esc(x.fecha) + '|' + campo + '" value="' + esc(x.c[campo] == null ? '' : x.c[campo]) + '" placeholder="' + (cuyCotDe(x.fecha, campo) ? fmtTC(cuyCotDe(x.fecha, campo).v) : '—') + '">' : (x.c[campo] == null ? '—' : fmtTC(x.c[campo]));
   const cols = [
     { id:'fecha', t:'Fecha', fecha:x => x.fecha, td:x => '<b>' + fmtFecha(x.fecha) + '</b>' },
-    { id:'ars', t:'ARS por USD (BNA divisa)', cls:'num', td:x => inp(x, 'ars_usd') + (x.c.fuente_ars ? '<div class="muted">' + esc(x.c.fuente_ars) + '</div>' : '') },
-    { id:'uyu', t:'UYU por USD', cls:'num', td:x => inp(x, 'uyu_usd') + (x.c.fuente_uyu ? '<div class="muted">' + esc(x.c.fuente_uyu) + '</div>' : '') },
+    { id:'ars', t:'ARS por USD', cls:'num', td:x => { const k = cuyCotDe(x.fecha, 'ars_usd');
+        return inp(x, 'ars_usd') + (x.c.fuente_ars ? '<div class="muted">' + esc(x.c.fuente_ars) + '</div>' : k && k.auto ? '<div class="muted">índice ' + fmtFecha(k.fecha) + '</div>' : ''); } },
+    { id:'uyu', t:'UYU por USD (DGI)', cls:'num', td:x => inp(x, 'uyu_usd') + (x.c.fuente_uyu ? '<div class="muted">' + esc(x.c.fuente_uyu) + '</div>' : '') },
     { id:'cruce', t:'ARS por UYU', cls:'num', td:x => { const a = cuyCotDe(x.fecha, 'ars_usd'), u = cuyCotDe(x.fecha, 'uyu_usd'); return a && u ? fmtTC(a.v / u.v) : '—'; } },
     { id:'usos', t:'Facturas / movimientos', s:x => x.usos, cls:'num', td:x => x.usos || '<span class="muted">—</span>' },
     { id:'est', t:'Estado', v:est, td:x => { const e = est(x); return '<span class="badge ' + (e === 'Con cotización' ? 'b-verde' : 'b-rojo') + '">' + esc(e) + '</span>' + usa(x); } },
@@ -2022,14 +2040,19 @@ function cuyRenderCot(){
   const f = tablaFiltrar('cot', cols, filas, x => x.fecha + ' ' + fmtFecha(x.fecha));
   const faltan = filas.filter(x => x.usos && est(x) !== 'Con cotización').length;
   $main.innerHTML = cuyTabs()
-    + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango: USD → DOL con la cotización <b>ARS/USD (BNA divisa)</b>; UYU → PES, pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
+    + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango: USD → DOL con la cotización <b>ARS/USD</b>; UYU → PES, pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
     + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.gub.uy/direccion-general-impositiva/datos-y-estadisticas/datos/cotizaciones-interbancarias" target="_blank" rel="noopener">cotizaciones interbancarias de la DGI</a> y subilo con "Importar cotizaciones". '
-    + 'ARS/USD (BNA divisa): a mano desde <a class="lnk" href="https://www.bna.com.ar/Personas" target="_blank" rel="noopener">bna.com.ar</a>, o importando un Excel con fecha y valor. '
+    + 'ARS/USD: sale solo del <b>índice USD Oficial</b> del diccionario (el que usa EERR' + (CUY.oficErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.oficErr) + '</span>' : (CUY.ofic && CUY.ofic.length ? ', hasta el ' + fmtFecha(CUY.ofic[CUY.ofic.length - 1].fecha) : '')) + '); ojo: no es BNA divisa. Si cargás un valor acá (a mano o importado), ese manda. '
     + (faltan ? '<b class="warn">' + faltan + ' fecha(s) con facturas o movimientos sin cotización o con una cotización de más de 5 días antes (falta cargar ese período).</b>' : '') + '</div>'
     + '<div class="card">' + cardH('Cotizaciones por día', 'Una fila por fecha con facturas o movimientos. Se guarda al salir de la casilla (o con Enter). En gris dentro de la casilla: la cotización que se está usando.')
     + '<div class="tools" style="padding-bottom:0">'
     +   (SP.editar ? '<input type="date" id="ct-nf" class="tc-in" style="width:140px;text-align:left"><button class="btn ghost sm" id="ct-add">Agregar fecha</button>' : '')
-    +   '<span style="margin-left:auto;font-size:12px;color:var(--muted)">Cotización para cada movimiento:</span>'
+    +   '<span style="margin-left:auto;font-size:12px;color:var(--muted)">ARS/USD automático:</span>'
+    +   '<select id="ct-ars" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
+    +     '<option value="venta"' + (cuyArsAuto() === 'venta' ? ' selected' : '') + '>índice USD Oficial, vendedor</option>'
+    +     '<option value="compra"' + (cuyArsAuto() === 'compra' ? ' selected' : '') + '>índice USD Oficial, comprador</option>'
+    +     '<option value="no"' + (cuyArsAuto() === 'no' ? ' selected' : '') + '>no, solo lo cargado acá</option></select>'
+    +   '<span style="font-size:12px;color:var(--muted)">Cotización para cada movimiento:</span>'
     +   '<select id="ct-modo" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
     +     '<option value="anterior"' + (cuyCotModo() === 'anterior' ? ' selected' : '') + '>la del día hábil anterior (cierre)</option>'
     +     '<option value="mismo"' + (cuyCotModo() === 'mismo' ? ' selected' : '') + '>la del mismo día</option></select></div>'
@@ -2047,7 +2070,9 @@ function cuyRenderCot(){
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
   on('ct-add', async () => { const f = document.getElementById('ct-nf').value; if (!f) { toast('Elegí la fecha'); return; }
     try { await cuyCotGuardar(f, {}); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
-  on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas); on('ct-imp', cuyCotImportar); on('ct-ofic', cuyCotDesdeOficial);
+  on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas); on('ct-imp', cuyCotImportar);
+  const ao = document.getElementById('ct-ars');
+  if (ao) ao.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_AUTO', { codigo: ao.value, nombre: 'ARS/USD automático desde el índice USD Oficial' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const md = document.getElementById('ct-modo');
   if (md) md.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:COT_DIA', { codigo: md.value, nombre: 'Cotización: día anterior / mismo día' }); toast('Criterio guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
 }
@@ -2124,41 +2149,6 @@ function cuyCotImportar(){
     } catch (ex) { $('ci-err').textContent = 'Error: ' + (ex.message || ex); $('ci-ok').disabled = false; }
   });
 }
-// ARS/USD desde el diccionario de Compras: compras_usd_diario_oficial (USD Oficial día a día, el mismo que usa EERR;
-// lo registra Compras desde dolarapi "oficial" o a mano). OJO: no es BNA divisa — se avisa en pantalla y queda anotada
-// la fuente. Lectura para adminfin: sql/2026-10_contabilidad_uy_usd_oficial.sql.
-async function cuyCotDesdeOficial(){
-  let ofic;
-  try { ofic = await selTodo('compras_usd_diario_oficial', 'fecha, compra, venta, fuente', 'fecha'); }
-  catch (e) { toast('No pude leer el USD Oficial del diccionario: ' + (e.message || e) + ' — falta correr sql/2026-10_contabilidad_uy_usd_oficial.sql'); return; }
-  if (!ofic.length) { toast('El diccionario no devolvió cotizaciones (¿falta correr sql/2026-10_contabilidad_uy_usd_oficial.sql?)'); return; }
-  const fs = ofic.map(o => o.fecha).sort(), fuentes = [...new Set(ofic.map(o => o.fuente || 'sin fuente'))];
-  abrirModal('ARS/USD desde el diccionario',
-    '<div class="kv">USD Oficial del diccionario de Compras (el que usa EERR): <b>' + ofic.length + ' días</b>, del ' + fmtFecha(fs[0]) + ' al ' + fmtFecha(fs[fs.length - 1]) + ' · fuentes: ' + esc(fuentes.join(', ')) + '.</div>'
-    + '<div class="box" style="background:#fdf6dc"><b>Ojo:</b> no es <b>BNA divisa</b>. Es el dólar oficial que Compras toma de dolarapi (hasta donde se sabe, BNA billete minorista) o carga a mano. Difiere un poco del divisa. Si el contador pide divisa, cargá esa a mano o importala.</div>'
-    + '<div class="frow c2" style="margin-top:10px"><div class="field"><label>Valor a usar</label><select id="co-lado"><option value="venta">Vendedor</option><option value="compra">Comprador</option></select></div>'
-    + '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--ink)"><input type="checkbox" id="co-pisar" style="width:auto"> Reemplazar también las que ya tienen ARS/USD (menos las cargadas a mano)</label></div></div>'
-    + '<div class="muted">Se copia a Cotizaciones con fuente "diccionario USD Oficial (vendedor/comprador)". Las cargadas a mano no se tocan.</div><div class="err" id="co-err"></div>',
-    '<button class="btn ghost" id="co-no">Cancelar</button><button class="btn" id="co-si">Copiar</button>', 'wide');
-  document.getElementById('co-no').addEventListener('click', cerrarModal);
-  document.getElementById('co-si').addEventListener('click', async () => {
-    const lado = document.getElementById('co-lado').value, pisar = document.getElementById('co-pisar').checked, err = document.getElementById('co-err');
-    const fte = 'diccionario USD Oficial (' + (lado === 'venta' ? 'vendedor' : 'comprador') + ')';
-    const filas = ofic.filter(o => cuyNum(o[lado]) > 0).filter(o => { const x = CUY.cots.find(k => k.fecha === o.fecha);
-        if (!x || cuyNum(x.ars_usd) == null) return true; if (x.fuente_ars === 'manual') return false; return pisar; })
-      .map(o => ({ fecha: o.fecha, ars_usd: +o[lado], fuente_ars: fte }));
-    if (!filas.length) { err.textContent = 'No hay fechas para completar (ya tienen ARS/USD).'; return; }
-    try {
-      for (let i = 0; i < filas.length; i += 500) {
-        const { data, error } = await sb.from(CUY_COT_T).upsert(filas.slice(i, i + 500), { onConflict:'fecha' }).select();
-        if (error) throw error; if (!data || !data.length) throw new Error('sin permiso de edición.');
-        data.forEach(d => { const k = CUY.cots.findIndex(x => x.fecha === d.fecha); if (k >= 0) CUY.cots[k] = d; else CUY.cots.push(d); });
-      }
-      CUY.cots.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)));
-      cerrarModal(); toast(filas.length + ' días de ARS/USD copiados del diccionario'); cuyRender();
-    } catch (e) { err.textContent = 'Error: ' + (e.message || e); }
-  });
-}
 // dolarapi (Uruguay): solo trae la cotización de HOY, no el histórico. Endpoint no verificado desde el desarrollo:
 // si falla o cambia el formato, se avisa y se carga a mano.
 async function cuyCotDolarApi(){
@@ -2200,6 +2190,7 @@ function cuyCotDesdeCambios(){
 }
 // TC (UYU por USD) de las facturas en dólares que lo tienen pendiente: el de Cotizaciones para su fecha
 function cuyCotTcFacturas(){
+  cuySerieArmar();
   const pend = CUY.lista.filter(cuyTcPend).map(r => ({ r, c: cuyCotDe(r.fecha, 'uyu_usd') })).filter(x => x.c);
   const sin = CUY.lista.filter(cuyTcPend).length - pend.length;
   if (!pend.length) { toast(sin ? 'Hay ' + sin + ' facturas USD sin TC, pero tampoco hay cotización UYU/USD para su fecha' : 'No hay facturas USD con TC pendiente'); return; }
