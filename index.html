@@ -1216,8 +1216,10 @@ const CUY_PLAN_DEF = {
   'MONEDA:USD':             { codigo:'DOL' },
   'CONFIG:COT_DIA':         { codigo:'anterior' },
   'CONFIG:ARS_AUTO':        { codigo:'venta' },
+  'CONFIG:CAMBIO_TC':       { codigo:'banco' },
 };
 function cuyPlan(k){
+  if (String(k).startsWith('COD:')) { const cod = k.slice(4), c = CUY.dic.cuentas.find(x => x.cod === cod); return { codigo: cod, nombre: c ? c.desc : '' }; }
   const d = CUY_PLAN_DEF[k] || {}, p = CUY.plan[k] || {}, out = Object.assign({}, d);
   Object.keys(p).forEach(c => { if (p[c] != null && p[c] !== '') out[c] = p[c]; });
   return out;
@@ -1649,6 +1651,9 @@ function cuyMovForm(id, preset){
     + '<div class="frow">' + inp('mf-conc','Concepto', c.concepto) + '</div>'
     + '<div class="frow c3">' + inp('mf-clas','Clasificación', c.clasificacion, ' list="dl-mclas" placeholder="Ej. GASTOS BANCARIOS"') + inp('mf-rubro','Rubro', c.rubro, ' list="dl-rubro2"') + inp('mf-aux','Auxiliar / proyecto', c.auxiliar, ' list="dl-maux"') + '</div>'
     + '<div class="frow c3">' + inp('mf-prov','Proveedor', c.proveedor, ' list="dl-mprov"') + inp('mf-cod','Código proveedor', c.proveedor_cod) + inp('mf-fac','FAC', c.fac) + '</div>'
+    + '<div class="frow c2">' + inp('mf-contra','Contrapartida (cuenta Tango) — opcional', c.contrapartida, ' list="dl-mf-cta" placeholder="vacío = la del Plan de cuentas por clasificación"')
+    +   '<div class="field"><label>&nbsp;</label><div class="muted" style="font-size:11.5px;padding-top:6px" id="mf-contra-n">Para transferencias / ingresos cuya contrapartida depende del caso (aporte, préstamo, otra cuenta propia). No aplica a facturas vinculadas (van a Proveedores) ni a cambios de moneda emparejados (van contra la otra cuenta).</div></div></div>'
+    + '<datalist id="dl-mf-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>'
     + '<div class="frow">' + inp('mf-com','Comentarios', c.comentarios) + '</div>'
     + dl('dl-mclas', ['GASTOS BANCARIOS','ENTRE BANCOS','HONORARIOS','RETIRO BANCO','SMALL BALANCE'].concat(CUY.movs.map(x => x.clasificacion)))
     + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', CUY.movs.map(x => x.auxiliar)) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.map(x => x.proveedor)))
@@ -1666,6 +1671,10 @@ function cuyMovForm(id, preset){
       concepto: v('mf-conc') || null, clasificacion: v('mf-clas') || null, rubro: v('mf-rubro') || null, auxiliar: v('mf-aux') || null,
       proveedor: v('mf-prov') || null, proveedor_cod: v('mf-cod') || null, fac: v('mf-fac') || null, comentarios: v('mf-com') || null };
     if (!m0) fila.origen = 'manual';
+    // contrapartida: solo se manda si se usa (si falta correr sql/2026-10_contabilidad_uy_contrapartida.sql, el resto se guarda igual)
+    if (v('mf-contra') || (m0 && m0.contrapartida)) {
+      if (v('mf-contra') && CUY.dic.cuentas.length && !cuyDicCta(v('mf-contra'))) { err.textContent = 'La contrapartida ' + v('mf-contra') + ' no está en el diccionario de cuentas.'; return; }
+      fila.contrapartida = v('mf-contra') || null; }
     $('mf-ok').disabled = true;
     try { await cuyMovGuardar(m0 ? m0.id : null, fila); cerrarModal(); toast(m0 ? 'Movimiento actualizado' : 'Movimiento agregado'); cuyRender(); }
     catch (e) { err.textContent = 'Error: ' + (e.message || e); $('mf-ok').disabled = false; }
@@ -1854,11 +1863,32 @@ function cuyAsientoFac(r){
   return { id: r.id, fecha: r.fecha, mon: ma, cot: cuyCotDe(r.fecha, 'ars_usd'), falta: cuyFaltaCot(r.fecha, mon),
            concepto: cuyLey([r.tipo_cfe, r.serie_numero, r.proveedor_cod || r.proveedor]), lineas };
 }
+// Contrapartida del asiento de un movimiento:
+//   pago de facturas → Proveedores · cambio de moneda emparejado → la otra cuenta (un solo asiento, 'CAMBIO') ·
+//   contrapartida cargada en el movimiento (código Tango) → esa · gasto bancario → Gastos bancarios · si no, por clasificación.
 function cuyContraMov(m){
   if (cuyCompDeMov(m.id).length) return 'PROVEEDORES';
+  if (CUY_ESP[m.id] && cuyEsCambio(m)) return 'CAMBIO';
+  if (String(m.contrapartida || '').trim()) return 'COD:' + String(m.contrapartida).trim();
   return m.tipo === 'gasto_bancario' ? 'CLASIF:GASTOS BANCARIOS' : cuyClaveClasif(m.clasificacion);
 }
+// Cambio de moneda: UN asiento por par, en DOL (la cuenta en dólares conserva sus US$), Debe/Haber las dos cuentas del Santander.
+// TC (Cotizaciones, CONFIG:CAMBIO_TC): 'banco' (por defecto) = el que aplicó el banco: la pata en pesos vale lo mismo que la
+// de dólares y no hay diferencia de cambio en el asiento (la diferencia con el oficial aparece al revaluar el saldo al cierre);
+// 'oficial' = los pesos a dólares con UYU/USD DGI y lo que no cierra va a diferencia de cambio.
+// El asiento se identifica con el movimiento de la cuenta en dólares.
+const cuyCambioTc = () => cuyPlan('CONFIG:CAMBIO_TC').codigo === 'oficial' ? 'oficial' : 'banco';
+function cuyAsientoCambio(m){
+  const e = CUY_ESP[m.id], usd = cuyCta(m.cuenta).mon === 'USD' ? m : e, uyu = usd === m ? e : m, banco = cuyCambioTc() === 'banco';
+  const vUyu = banco ? r2(-(+usd.importe)) : cuyConv(+uyu.importe, 'UYU', 'USD', uyu.fecha), ley = cuyLey(['Cambio de moneda', 'US$ ' + fmtNum(Math.abs(+usd.importe)), '$U ' + fmtNum(Math.abs(+uyu.importe)), 'TC ' + fmtTC(Math.abs(+uyu.importe) / Math.abs(+usd.importe))]);
+  const lineas = [{ clave: 'CUENTA:' + usd.cuenta, monto: r2(+usd.importe), leyenda: ley }, { clave: 'CUENTA:' + uyu.cuenta, monto: vUyu, leyenda: ley }];
+  if (vUyu != null) { const resto = r2(-lineas.reduce((a,l) => a + l.monto, 0));
+    if (Math.abs(resto) >= 0.01) lineas.push({ clave: resto > 0 ? 'DIF_CAMBIO_NEG' : 'DIF_CAMBIO_POS', monto: resto, leyenda: cuyLey(['Dif. de cambio', ley]), eerr: '' }); }
+  return { id: usd.id, par: [usd.id, uyu.id], fecha: usd.fecha, mon: 'USD', cot: cuyCotDe(usd.fecha, 'ars_usd'), falta: cuyFaltaCot(uyu.fecha, banco ? 'USD' : 'UYU'),
+           concepto: cuyLey(['Cambio de moneda', usd.cuenta + ' / ' + uyu.cuenta]), lineas };
+}
 function cuyAsientoMov(m){
+  if (cuyContraMov(m) === 'CAMBIO') return cuyAsientoCambio(m);
   const cta = cuyCta(m.cuenta), mon = cta.mon, ma = cuyMonAs(mon), imp0 = +m.importe || 0, imp = cuyConv(imp0, mon, ma, m.fecha);
   const k = cuyContraMov(m), ley = cuyLey([m.proveedor_cod || m.proveedor, m.fac, m.concepto]), falta = cuyFaltaCot(m.fecha, mon);
   const comps = cuyCompDeMov(m.id), lineas = [];
@@ -1872,10 +1902,6 @@ function cuyAsientoMov(m){
       return tot ? r2(v * ap / tot) : 0; });
     const suma = vals.some(v => v == null) ? null : r2(vals.reduce((a,v) => a + v, 0));
     lineas.push({ clave:'PROVEEDORES', monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley });
-  } else if (CUY_ESP[m.id] && ma === 'ARS') {
-    // Pata en pesos de un cambio de moneda: la cuenta puente se cancela al valor en ARS de la pata en dólares
-    const e = CUY_ESP[m.id], vUsd = cuyConv(Math.abs(+e.importe), 'USD', 'ARS', e.fecha);
-    lineas.push({ clave: k, monto: vUsd == null ? null : (imp0 > 0 ? -vUsd : vUsd), leyenda: ley });
   } else {
     const res = k !== 'PROVEEDORES';
     lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, proy: res ? cuyProyCod(m.auxiliar) : '' });
@@ -1940,7 +1966,7 @@ function cuyAsientoExportar(asientos, nombre){
 const cuyRegistrado = x => !!String(x.asiento_num || '').trim();
 function cuyRenderAsientos(){
   const fac = CUY.asTab === 'fac', ns = fac ? 'afac' : 'amov', sel = CUY.sel[fac ? 'fac' : 'mov'];
-  const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial');
+  const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
   const asDe = x => fac ? cuyAsientoFac(x) : cuyAsientoMov(x);
   const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave);
   const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num', td:x => { const a = asDe(x);
@@ -1969,7 +1995,11 @@ function cuyRenderAsientos(){
     { id:'tipo', t:'Tipo', v:m => CUY_TIPOS_MOV[m.tipo] || m.tipo, td:m => esc(CUY_TIPOS_MOV[m.tipo] || m.tipo) },
     { id:'conc', t:'Concepto', cls:'wrap', td:m => esc(m.concepto || '') },
     { id:'imp', t:'Importe', s:m => +m.importe, cls:'num', td:m => fmtMon(+m.importe, cuyCta(m.cuenta).mon) },
-    { id:'contra', t:'Contrapartida', v:m => cuyContraMov(m), td:m => esc(cuyContraMov(m)) },
+    { id:'contra', t:'Contrapartida', v:m => { const k = cuyContraMov(m); return k === 'CAMBIO' ? 'Cambio de moneda' : k.startsWith('COD:') ? 'Cargada en el movimiento' : k; },
+      td:m => { const k = cuyContraMov(m);
+        if (k === 'CAMBIO') { const e = CUY_ESP[m.id]; return '↔ ' + esc(e.cuenta) + ' ' + fmtMon(+e.importe, cuyCta(e.cuenta).mon) + '<div class="muted">un solo asiento por el cambio</div>'; }
+        if (k.startsWith('COD:')) { const p = cuyPlan(k); return esc(p.codigo) + (p.nombre ? ' · ' + esc(p.nombre) : '') + '<div class="muted">cargada en el movimiento</div>'; }
+        return esc(k); } },
     colTango, colCod, colAs, { id:'num', t:'N° asiento Tango', td:inpAs } ];
   const txt = fac ? cuyTexto : (m => [m.concepto, m.cuenta, m.clasificacion, m.proveedor, m.asiento_num].join(' '));
   TABLAS[ns] = { cols, base: () => base };
@@ -1980,7 +2010,7 @@ function cuyRenderAsientos(){
   const sub = '<div class="mtabs" style="margin:-4px 0 14px"><button class="mtab' + (fac ? ' active' : '') + '" data-astab="fac">Registro de facturas</button><button class="mtab' + (!fac ? ' active' : '') + '" data-astab="mov">Pagos y gastos bancarios</button></div>';
   const reg = base.filter(cuyRegistrado).length;
   const meta = fac ? 'Una por comprobante: Debe gasto (cuenta del rubro, neto) + Debe IVA compras · Haber Proveedores (total). Facturas en USD → asiento en DOL con la cotización ARS/USD del día; en UYU → asiento en PES, pasado a ARS por el dólar. Notas de crédito en negativo: el asiento sale invertido.'
-    : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda (contra la cuenta puente de su clasificación), ingresos. Cuentas USD → DOL; cuentas en pesos UY → PES.';
+    : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda entre Santander USD y pesos (un solo asiento por el par, cuenta contra cuenta, en DOL; la pata en pesos no aparece aparte), transferencias e ingresos (contra la cuenta cargada en el movimiento o, si no, la de su clasificación). Cuentas USD → DOL; cuentas en pesos UY → PES.';
   $main.innerHTML = cuyTabs() + sub
     + '<div class="meta-bar">Se exportan los tildados; si no tildás nada, los <b>pendientes</b> que se ven con los filtros. Se importan en Tango en Borrador; después de revisarlos cargá el N° de asiento acá para dejar constancia de que quedaron registrados (' + reg + ' de ' + base.length + ' registrados).</div>'
     + '<div class="card">' + cardH(fac ? 'Registro de facturas' : 'Pagos y gastos bancarios', meta)
@@ -1997,7 +2027,8 @@ function cuyRenderAsientos(){
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
     inp.addEventListener('change', async () => {
       const id = inp.dataset.asnum, v = inp.value.trim() || null;
-      try { if (fac) await cuyUpdate(id, { asiento_num: v }); else await cuyMovGuardar(id, { asiento_num: v });
+      try { if (fac) await cuyUpdate(id, { asiento_num: v }); else { await cuyMovGuardar(id, { asiento_num: v });
+              const mm = CUY.movs.find(x => x.id === id); if (mm && cuyContraMov(mm) === 'CAMBIO') await cuyMovGuardar(CUY_ESP[id].id, { asiento_num: v }); }   // el cambio es un solo asiento: el N° va a las dos patas
         sel.delete(id); toast(v ? 'N° de asiento guardado' : 'N° de asiento borrado'); cuyRender(); }
       catch (e) { toast('No se guardó: ' + (e.message || e)); }
     });
@@ -2052,6 +2083,10 @@ function cuyRenderCot(){
     +     '<option value="venta"' + (cuyArsAuto() === 'venta' ? ' selected' : '') + '>índice USD Oficial, vendedor</option>'
     +     '<option value="compra"' + (cuyArsAuto() === 'compra' ? ' selected' : '') + '>índice USD Oficial, comprador</option>'
     +     '<option value="no"' + (cuyArsAuto() === 'no' ? ' selected' : '') + '>no, solo lo cargado acá</option></select>'
+    +   '<span style="font-size:12px;color:var(--muted)">Cambios de moneda:</span>'
+    +   '<select id="ct-camtc" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
+    +     '<option value="banco"' + (cuyCambioTc() === 'banco' ? ' selected' : '') + '>al TC del banco (sin dif. de cambio)</option>'
+    +     '<option value="oficial"' + (cuyCambioTc() === 'oficial' ? ' selected' : '') + '>al oficial DGI (con dif. de cambio)</option></select>'
     +   '<span style="font-size:12px;color:var(--muted)">Cotización para cada movimiento:</span>'
     +   '<select id="ct-modo" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
     +     '<option value="anterior"' + (cuyCotModo() === 'anterior' ? ' selected' : '') + '>la del día hábil anterior (cierre)</option>'
@@ -2071,6 +2106,8 @@ function cuyRenderCot(){
   on('ct-add', async () => { const f = document.getElementById('ct-nf').value; if (!f) { toast('Elegí la fecha'); return; }
     try { await cuyCotGuardar(f, {}); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas); on('ct-imp', cuyCotImportar);
+  const ct = document.getElementById('ct-camtc');
+  if (ct) ct.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:CAMBIO_TC', { codigo: ct.value, nombre: 'TC de los cambios de moneda' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const ao = document.getElementById('ct-ars');
   if (ao) ao.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_AUTO', { codigo: ao.value, nombre: 'ARS/USD automático desde el índice USD Oficial' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const md = document.getElementById('ct-modo');
@@ -2215,7 +2252,7 @@ function cuyPlanClaves(){
   add('CLASIF:GASTOS BANCARIOS','Gasto / contrapartida','Gastos bancarios (comisiones)', 0, true);
   CUY_CTAS.forEach(c => add('CUENTA:' + c.n, 'Banco / caja', c.n + ' (' + c.mon + ')', CUY.movs.filter(m => m.cuenta === c.n).length));
   CUY.lista.forEach(r => add(cuyClaveRubro(r.rubro), 'Gasto por rubro (facturas)', r.rubro || '(sin rubro)', 1, true));
-  CUY.movs.filter(m => m.tipo !== 'saldo_inicial').forEach(m => { const c = cuyContraMov(m); if (c !== 'PROVEEDORES') add(c, 'Gasto / contrapartida', c.slice(7), 1, true); });
+  CUY.movs.filter(m => m.tipo !== 'saldo_inicial').forEach(m => { const c = cuyContraMov(m); if (c !== 'PROVEEDORES' && c !== 'CAMBIO' && !c.startsWith('COD:')) add(c, 'Gasto / contrapartida', c.slice(7), 1, true); });
   Object.keys(CUY.plan).forEach(c => { if (!k.has(c) && !c.startsWith('CONFIG:')) add(c, 'Otras (guardadas)', c); });
   return [...k.values()];
 }
