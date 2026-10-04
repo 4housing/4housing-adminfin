@@ -1087,6 +1087,10 @@ function cuyForm(id, preset){
     + '<div class="frow"><div class="field"><label>Observaciones</label><textarea id="cf-obs" rows="2" placeholder="Algo a revisar (queda la fila en amarillo)">' + esc(c.observaciones || '') + '</textarea></div></div>'
     + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.lista.map(x => x.proveedor)) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
     + dl('dl-proy', CUY.lista.map(x => x.proyecto)) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', CUY_CTAS.map(x => x.n).concat(CUY.lista.map(x => x.cuenta)))
+    + '<div class="box"><h4>Imputación contable</h4>'
+    +   '<div class="frow c2">' + inp('cf-cgasto','Cuenta de gasto (Tango) — opcional', c.cuenta_gasto, ' list="dl-cf-cta"') + inp('cf-ccontra','Contrapartida (Tango) — opcional', c.cuenta_contra, ' list="dl-cf-cta"') + '</div>'
+    +   '<div id="cf-imp" style="margin-top:8px"></div></div>'
+    + '<datalist id="dl-cf-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>'
     + '<div class="err" id="cf-err"></div>';
   abrirModal(r ? 'Editar comprobante · ' + (r.serie_numero || r.id) : (preset && cuyEsEfectivo(preset.cuenta) ? 'Factura pagada en efectivo' : 'Nuevo comprobante'), body,
     '<button class="btn ghost" id="cf-cerrar">Cancelar</button><button class="btn" id="cf-ok">Guardar</button>', 'wide');
@@ -1099,6 +1103,26 @@ function cuyForm(id, preset){
   const autoTotal = () => { if (totalAMano) return; const n = parseFloat($('cf-neto').value), i = parseFloat($('cf-iva').value);
     if (!isNaN(n) || !isNaN(i)) $('cf-total').value = (Math.round(((isNaN(n) ? 0 : n) + (isNaN(i) ? 0 : i)) * 100) / 100).toFixed(2); };
   $('cf-neto').addEventListener('input', autoTotal); $('cf-iva').addEventListener('input', autoTotal);
+  // Vista previa del asiento con lo que está escrito en el formulario (se actualiza al tipear)
+  const imputacion = () => {
+    const usd = $('cf-mon').value === 'USD', n = i => $(i).value === '' ? null : +$(i).value, tot = n('cf-total');
+    const t = { id: (r && r.id) || 'nuevo', fecha: $('cf-fecha').value, rubro: $('cf-rubro').value.trim(), proyecto: $('cf-proy').value.trim(), origen_moneda: usd ? 'USD' : 'UYU',
+      proveedor: $('cf-prov').value.trim(), proveedor_cod: $('cf-cod').value.trim(), serie_numero: $('cf-serie').value.trim(), tc: usd ? n('cf-tc') : null,
+      total_usd: usd ? tot : null, iva_usd: usd ? n('cf-iva') : null, total_uyu: usd ? null : tot, iva_uyu: usd ? null : n('cf-iva'),
+      cuenta_gasto: $('cf-cgasto').value.trim(), cuenta_contra: $('cf-ccontra').value.trim() };
+    const ph = (id, k) => { const p = cuyPlan(k); $(id).placeholder = p.codigo ? p.codigo + ' · ' + (p.nombre || '') + ' (por defecto)' : 'sin cuenta por defecto: elegí una'; };
+    ph('cf-cgasto', cuyClaveRubro(t.rubro)); ph('cf-ccontra', 'PROVEEDORES');
+    if (tot == null || !t.fecha) { $('cf-imp').innerHTML = '<div class="muted">Completá fecha y total para ver el asiento.</div>'; return; }
+    const a = cuyAsientoFac(t), cta = k => { const p = cuyPlan(k); return p.codigo ? '<b>' + esc(p.codigo) + '</b> ' + esc(p.nombre || (cuyDicCta(p.codigo) || {}).desc || '') : '<span class="warn">⚠ sin cuenta (' + esc(k) + ')</span>'; };
+    const filas = a.lineas.filter(l => l.monto == null || r2(l.monto)).map(l => '<tr><td>' + cta(l.clave) + (l.auxEerr ? '<div class="muted">aux. EERR ' + esc(l.auxEerr) + ' · ' + esc(t.rubro) + '</div>' : (l.eerr ? '<div class="muted warn">sin aux. EERR para ' + esc(t.rubro || 'el rubro') + '</div>' : '')) + (l.proy ? '<div class="muted">proyecto ' + esc(l.proy) + '</div>' : '') + '</td>'
+      + '<td class="num">' + (l.monto > 0 ? fmtMon(l.monto, a.mon) : '') + '</td><td class="num">' + (l.monto < 0 ? fmtMon(-l.monto, a.mon) : '') + '</td></tr>').join('');
+    const cuentaPago = $('cf-cta').value.trim(), pk = cuyCta(cuentaPago) ? cuyPlan('CUENTA:' + cuentaPago) : null;
+    $('cf-imp').innerHTML = (a.falta.length ? '<div class="warn" style="font-size:12px">⚠ falta cotización ' + esc([...new Set(a.falta)].join(', ')) + ' para pasar a ' + (a.mon === 'USD' ? 'DOL' : 'PES') + ': los importes se completan cuando esté cargada.</div>' : '')
+      + '<table class="grid"><thead><tr><th>Cuenta</th><th>Debe</th><th>Haber</th></tr></thead><tbody>' + filas + '</tbody></table>'
+      + '<div class="muted" style="margin-top:6px">Asiento en ' + (a.mon === 'USD' ? 'DOL' + (a.cot ? ' · cotización ' + fmtTC(a.cot.v) : '') : 'PES (ARS)') + '. Al pagarse: Debe ' + cta(cuyClaveContra(t)) + ' / Haber ' + (pk && pk.codigo ? '<b>' + esc(pk.codigo) + '</b> ' + esc(pk.nombre || cuentaPago) : esc(cuentaPago || 'la cuenta de pago')) + '.</div>';
+  };
+  ['cf-fecha','cf-mon','cf-neto','cf-iva','cf-total','cf-tc','cf-rubro','cf-proy','cf-cgasto','cf-ccontra','cf-cta','cf-prov','cf-cod','cf-serie'].forEach(i => { $(i).addEventListener('input', imputacion); $(i).addEventListener('change', imputacion); });
+  imputacion();
   $('cf-ok').addEventListener('click', () => cuyGuardar(r ? r.id : null));
 }
 async function cuyGuardar(id){
@@ -1119,6 +1143,12 @@ async function cuyGuardar(id){
     estado_pago: v('cf-est') || null, cuenta: v('cf-cta') || null, fecha_pago: v('cf-fpago') || null,
     doc_relacionado: v('cf-rel') || null, anulada: $('cf-anul').checked, observaciones: v('cf-obs') || null,
   };
+  const previa = id ? CUY.lista.find(x => x.id === id) : null;
+  for (const [campo, inpId] of [['cuenta_gasto','cf-cgasto'], ['cuenta_contra','cf-ccontra']]) {
+    const val = v(inpId);
+    if (val && CUY.dic.cuentas.length && !cuyDicCta(val)) { err.textContent = 'La cuenta ' + val + ' no está en el diccionario.'; return; }
+    if (val || (previa && previa[campo])) fila[campo] = val || null;   // sql/2026-10_contabilidad_uy_imputacion_factura.sql
+  }
   $('cf-ok').disabled = true;
   try {
     let guardada;
@@ -1852,14 +1882,24 @@ const cuyClaveClasif = c => 'CLASIF:' + (String(c || '').trim().toUpperCase() ||
 // Valor de una factura en la moneda del asiento (USD | ARS), con las cotizaciones de la fecha de la factura:
 // es el importe con el que quedó registrada la deuda con el proveedor.
 function cuyFacValor(r, ma){ const mon = cuyEsUSD(r) ? 'USD' : 'UYU'; return cuyConv(cuyNum(mon === 'USD' ? r.total_usd : r.total_uyu) || 0, mon, ma, r.fecha); }
+// Cuenta del gasto: la del comprobante si la tiene; si no, la del Plan de cuentas según el rubro
+const cuyClaveGasto = r => String(r.cuenta_gasto || '').trim() ? 'COD:' + String(r.cuenta_gasto).trim() : cuyClaveRubro(r.rubro);
+// Contrapartida (deuda): la del comprobante si la tiene; si no, Proveedores
+const cuyClaveContra = r => String(r.cuenta_contra || '').trim() ? 'COD:' + String(r.cuenta_contra).trim() : 'PROVEEDORES';
+// Aux 02 EERR del rubro: el cargado en el Plan de cuentas; si no, la opción del diccionario con el mismo nombre (ej. "K) ESTRUCTURA")
+function cuyAuxEerr(rubro){
+  const p = cuyPlan(cuyClaveRubro(rubro)); if (p.aux_eerr) return p.aux_eerr;
+  const n = fold(rubro).replace(/\s+/g,' ').trim(), o = n && CUY.dic.eerr.find(x => fold(x.desc).replace(/\s+/g,' ').trim() === n);
+  return o ? o.cod : '';
+}
 function cuyAsientoFac(r){
   const mon = cuyEsUSD(r) ? 'USD' : 'UYU', ma = cuyMonAs(mon);
   const tot = cuyFacValor(r, ma), iva = cuyConv(cuyNum(mon === 'USD' ? r.iva_usd : r.iva_uyu) || 0, mon, ma, r.fecha);
   const neto = tot == null ? null : r2(tot - (iva || 0));   // el neto absorbe el redondeo: el asiento siempre cierra
-  const ley = cuyLey([r.proveedor_cod || r.proveedor, r.serie_numero, r.proyecto]), kR = cuyClaveRubro(r.rubro);
-  const lineas = [{ clave: kR, monto: neto, leyenda: ley, eerr: r.rubro, proy: cuyProyCod(r.proyecto) }];
+  const ley = cuyLey([r.proveedor_cod || r.proveedor, r.serie_numero, r.proyecto]), kR = cuyClaveGasto(r);
+  const lineas = [{ clave: kR, monto: neto, leyenda: ley, eerr: r.rubro, auxEerr: cuyAuxEerr(r.rubro), proy: cuyProyCod(r.proyecto) }];
   if (iva) lineas.push({ clave:'IVA_COMPRAS', monto: iva, leyenda: ley });
-  lineas.push({ clave:'PROVEEDORES', monto: tot == null ? null : -tot, leyenda: ley });
+  lineas.push({ clave: cuyClaveContra(r), monto: tot == null ? null : -tot, leyenda: ley });
   return { id: r.id, fecha: r.fecha, mon: ma, cot: cuyCotDe(r.fecha, 'ars_usd'), falta: cuyFaltaCot(r.fecha, mon),
            concepto: cuyLey([r.tipo_cfe, r.serie_numero, r.proveedor_cod || r.proveedor]), lineas };
 }
@@ -1895,13 +1935,15 @@ function cuyAsientoMov(m){
   if (comps.length) {
     // Pago de facturas: Proveedores se cancela al valor con que se registró cada factura
     // parte de cada factura que cancela este pago (aplicado ÷ total) × valor con que se registró la factura
-    const vals = cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); if (!c) return 0;
-      const v = cuyFacValor(c, ma), ap = cuyAplEnOrigen(a), tot = cuyFacTotal(c);
-      if (v == null) { cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); return null; }
-      if (ap == null) { falta.push('UYU/USD para pasar el pago a la moneda de la factura ' + (c.serie_numero || c.id)); return null; }
-      return tot ? r2(v * ap / tot) : 0; });
-    const suma = vals.some(v => v == null) ? null : r2(vals.reduce((a,v) => a + v, 0));
-    lineas.push({ clave:'PROVEEDORES', monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley });
+    // (la deuda se cancela en la contrapartida de cada factura: Proveedores o la cargada en el comprobante)
+    const porCta = {};
+    cuyAplDeMov(m.id).forEach(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); if (!c) return;
+      const k2 = cuyClaveContra(c), v = cuyFacValor(c, ma), ap = cuyAplEnOrigen(a), tot = cuyFacTotal(c); let val;
+      if (v == null) { cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); val = null; }
+      else if (ap == null) { falta.push('UYU/USD para pasar el pago a la moneda de la factura ' + (c.serie_numero || c.id)); val = null; }
+      else val = tot ? r2(v * ap / tot) : 0;
+      porCta[k2] = (k2 in porCta && porCta[k2] == null) || val == null ? null : r2((porCta[k2] || 0) + val); });
+    Object.entries(porCta).forEach(([k2, suma]) => lineas.push({ clave: k2, monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley }));
   } else {
     const res = k !== 'PROVEEDORES';
     lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, proy: res ? cuyProyCod(m.auxiliar) : '' });
@@ -1933,7 +1975,8 @@ function cuyAsientoHojas(asientos){
       const imp = r2(Math.abs(l.monto));
       ren.push([a.id, nro, cod, l.monto > 0 ? imp : '', l.monto < 0 ? imp : '', fecha, l.leyenda || '', '', '', 'No', '']);
       // Aux 02 EERR: solo si la cuenta lo tiene cargado en el plan (las cuentas patrimoniales no llevan)
-      if (l.eerr !== undefined && p.aux_eerr) aux.push([a.id, nro, '02', 'EERR', p.aux_eerr, l.eerr || p.nombre || '', 100, imp, l.leyenda || '']);
+      const auxE = l.auxEerr || p.aux_eerr;
+      if (l.eerr !== undefined && auxE) aux.push([a.id, nro, '02', 'EERR', auxE, l.eerr || p.nombre || '', 100, imp, l.leyenda || '']);
       if (l.proy) aux.push([a.id, nro, '03', 'INSTRUCTIVO DE FABRICACION', l.proy, '', 100, imp, l.leyenda || '']);
     });
     if (a.mon === 'USD' && a.cot) cot.push([a.id, monCod, 'COTIZACIÓN', a.cot.v, 'No', '']);   // DOL: cotización ARS/USD (BNA divisa)
@@ -2251,7 +2294,7 @@ function cuyPlanClaves(){
   add('DIF_CAMBIO_POS','Fijas','Diferencia de cambio positiva (ganancia)', 0, true); add('DIF_CAMBIO_NEG','Fijas','Diferencia de cambio negativa (pérdida)', 0, true);
   add('CLASIF:GASTOS BANCARIOS','Gasto / contrapartida','Gastos bancarios (comisiones)', 0, true);
   CUY_CTAS.forEach(c => add('CUENTA:' + c.n, 'Banco / caja', c.n + ' (' + c.mon + ')', CUY.movs.filter(m => m.cuenta === c.n).length));
-  CUY.lista.forEach(r => add(cuyClaveRubro(r.rubro), 'Gasto por rubro (facturas)', r.rubro || '(sin rubro)', 1, true));
+  CUY.lista.forEach(r => { if (!String(r.cuenta_gasto || '').trim()) add(cuyClaveRubro(r.rubro), 'Gasto por rubro (facturas)', r.rubro || '(sin rubro)', 1, true); });
   CUY.movs.filter(m => m.tipo !== 'saldo_inicial').forEach(m => { const c = cuyContraMov(m); if (c !== 'PROVEEDORES' && c !== 'CAMBIO' && !c.startsWith('COD:')) add(c, 'Gasto / contrapartida', c.slice(7), 1, true); });
   Object.keys(CUY.plan).forEach(c => { if (!k.has(c) && !c.startsWith('CONFIG:')) add(c, 'Otras (guardadas)', c); });
   return [...k.values()];
