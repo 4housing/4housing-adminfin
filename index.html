@@ -1273,7 +1273,7 @@ const CUY_PLAN_DEF = {
   'CUENTA:Efectivo pesos':  { codigo:'11110082', nombre:'CAJA PESOS UY' },
   'PROVEEDORES':            { codigo:'21100001', nombre:'Proveedores' },
   'IVA_COMPRAS':            { codigo:'11510001', nombre:'IVA Credito Fiscal' },
-  'CLASIF:GASTOS BANCARIOS':{ codigo:'55000005', nombre:'Gastos Bancarios' },
+  'CLASIF:GASTOS BANCARIOS':{ codigo:'55000005', nombre:'Gastos Bancarios', aux_eerr:'20' },   // aux. 02 = K) ESTRUCTURA siempre (Micaela, oct 2026)
   'DIF_CAMBIO_POS':         { codigo:'42000002', nombre:'Diferencia de c° positiva', aux_eerr:'11' },   // aux. 02 = J) OTROS INGRESOS (Micaela, oct 2026); solo aux. 02
   'DIF_CAMBIO_NEG':         { codigo:'58000002', nombre:'Diferencia de c° negativa', aux_eerr:'21' },   // aux. 02 = J) OTROS EGRESOS (Micaela, oct 2026); solo aux. 02
   'MONEDA:ARS':             { codigo:'PES' },
@@ -1337,9 +1337,11 @@ function cuySerie(campo){
     .map(c => ({ fecha: String(c.fecha), v: +c[campo], fuente: c[campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu'] || '' }));
   if (campo !== 'ars_usd' || modo === 'no') return propias;
   const ya = new Set(propias.map(x => x.fecha));
-  const auto = modo === 'billete'
+  const usaBill = modo === 'billete' && (CUY.bill || []).length;   // si no se puede leer el Billete (falta el SQL), respaldo: USD Oficial vendedor
+  const lado = usaBill ? 'billete' : (modo === 'billete' ? 'venta' : modo);
+  const auto = lado === 'billete'
     ? (CUY.bill || []).filter(o => !ya.has(String(o.fecha)) && cuyProm(o) > 0).map(o => ({ fecha: String(o.fecha), v: Math.round(cuyProm(o) * 10000) / 10000, fuente: 'USD Billete promedio (dolarapi)', auto: true }))
-    : (CUY.ofic || []).filter(o => !ya.has(String(o.fecha)) && cuyNum(o[modo]) > 0).map(o => ({ fecha: String(o.fecha), v: +o[modo], fuente: 'índice USD Oficial (' + (modo === 'venta' ? 'vendedor' : 'comprador') + ')', auto: true }));
+    : (CUY.ofic || []).filter(o => !ya.has(String(o.fecha)) && cuyNum(o[lado]) > 0).map(o => ({ fecha: String(o.fecha), v: +o[lado], fuente: 'índice USD Oficial (' + (lado === 'venta' ? 'vendedor' : 'comprador') + ')' + (modo === 'billete' ? ' · respaldo: no se pudo leer el Billete' : ''), auto: true }));
   return propias.concat(auto).sort((a,b) => a.fecha.localeCompare(b.fecha));
 }
 let CUY_SERIE = { ars_usd: [], uyu_usd: [] };
@@ -2031,7 +2033,7 @@ function cuyAsientoMov(m){
       if (CUY_UY && usdCta[k2] != null) l.usd = imp0 < 0 ? usdCta[k2] : -usdCta[k2]; lineas.push(l); });
   } else {
     const res = k !== 'PROVEEDORES';
-    lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, auxEerr: res && m.rubro ? cuyAuxEerr(m.rubro) : '', proy: res ? cuyProyCod(m.auxiliar) : '' });
+    lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, auxEerr: res ? (cuyPlan(k).aux_eerr || (m.rubro ? cuyAuxEerr(m.rubro) : '')) : '', proy: res ? cuyProyCod(m.auxiliar) : '' });
   }
   lineas.push({ clave: 'CUENTA:' + m.cuenta, monto: imp, leyenda: ley });
   if (CUY_UY && mon === 'USD') { lineas[lineas.length - 1].usd = r2(imp0); if (!comps.length) lineas[0].usd = r2(-imp0); }
