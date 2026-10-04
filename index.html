@@ -1273,13 +1273,13 @@ const CUY_PLAN_DEF = {
   'CUENTA:Efectivo pesos':  { codigo:'11110082', nombre:'CAJA PESOS UY' },
   'PROVEEDORES':            { codigo:'21100001', nombre:'Proveedores' },
   'IVA_COMPRAS':            { codigo:'11510001', nombre:'IVA Credito Fiscal' },
-  'CLASIF:GASTOS BANCARIOS':{ codigo:'55000005', nombre:'Gastos Bancarios' },
+  'CLASIF:GASTOS BANCARIOS':{ codigo:'55000005', nombre:'Gastos Bancarios', aux_eerr:'20' },   // aux. 02 = K) ESTRUCTURA siempre (Micaela, oct 2026)
   'DIF_CAMBIO_POS':         { codigo:'42000002', nombre:'Diferencia de c° positiva', aux_eerr:'11' },   // aux. 02 = J) OTROS INGRESOS (Micaela, oct 2026); solo aux. 02
   'DIF_CAMBIO_NEG':         { codigo:'58000002', nombre:'Diferencia de c° negativa', aux_eerr:'21' },   // aux. 02 = J) OTROS EGRESOS (Micaela, oct 2026); solo aux. 02
   'MONEDA:ARS':             { codigo:'PES' },
   'MONEDA:USD':             { codigo:'DOL' },
   'CONFIG:COT_DIA':         { codigo:'anterior' },
-  'CONFIG:ARS_AUTO':        { codigo:'venta' },
+  'CONFIG:ARS_AUTO':        { codigo:'billete' },
   'CONFIG:CAMBIO_TC':       { codigo:'banco' },
 };
 function cuyPlan(k){
@@ -1318,15 +1318,30 @@ async function cuyCargarCot(){
   // el mismo que usa EERR). Lectura para adminfin: sql/2026-10_contabilidad_uy_usd_oficial.sql. Si no se puede leer, queda solo lo propio.
   try { CUY.ofic = (await selTodo('compras_usd_diario_oficial', 'fecha, compra, venta, fuente', 'fecha')).sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))); CUY.oficErr = ''; }
   catch (e) { CUY.ofic = []; CUY.oficErr = e.message || String(e); }
+  // USD Billete (blue) día a día que registra Compras desde dolarapi (compras_usd_diario): es la "Cotización Billete" DOL
+  // que se carga en Tango. Se usa el promedio compra/venta. Lectura: sql/2026-10_contabilidad_uy_usd_billete.sql.
+  try { CUY.bill = (await selTodo('compras_usd_diario', 'fecha, compra, venta, fuente', 'fecha')).sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))); CUY.billErr = ''; }
+  catch (e) { CUY.bill = []; CUY.billErr = e.message || String(e); }
 }
-// ARS/USD automático desde el índice USD Oficial: 'venta' (por defecto) | 'compra' | 'no' (solo lo cargado acá)
-const cuyArsAuto = () => { const v = cuyPlan('CONFIG:ARS_AUTO').codigo; return ['venta','compra','no'].includes(v) ? v : 'venta'; };
+// Promedio compra/venta (si falta uno, el que haya) — mismo criterio que usdProm() de Compras
+function cuyProm(o){ const c = cuyNum(o.compra), v = cuyNum(o.venta); return c != null && v != null ? (c + v) / 2 : (c != null ? c : v); }
+// ARS/USD automático: 'billete' (por defecto: USD Billete promedio del día, la cotización de Tango) |
+// 'venta' / 'compra' (índice USD Oficial) | 'no' (solo lo cargado acá)
+const cuyArsAuto = () => { const v = cuyPlan('CONFIG:ARS_AUTO').codigo; return ['billete','venta','compra','no'].includes(v) ? v : 'billete'; };
+// ARS/USD que se copiaron en su momento del USD Oficial con el botón (ya no existe): con otro índice no se usan
+const cuyEsCopiaOfic = c => /^diccionario USD Oficial/i.test(String(c.fuente_ars || ''));
 // Serie efectiva de cada cotización: lo cargado en Cotizaciones manda; el ARS/USD que falte sale del índice USD Oficial
 function cuySerie(campo){
-  const propias = CUY.cots.filter(c => cuyNum(c[campo]) != null).map(c => ({ fecha: String(c.fecha), v: +c[campo], fuente: c[campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu'] || '' }));
-  if (campo !== 'ars_usd' || cuyArsAuto() === 'no' || !(CUY.ofic || []).length) return propias;
-  const lado = cuyArsAuto(), ya = new Set(propias.map(x => x.fecha));
-  const auto = CUY.ofic.filter(o => !ya.has(String(o.fecha)) && cuyNum(o[lado]) > 0).map(o => ({ fecha: String(o.fecha), v: +o[lado], fuente: 'índice USD Oficial (' + (lado === 'venta' ? 'vendedor' : 'comprador') + ')', auto: true }));
+  const modo = cuyArsAuto();
+  const propias = CUY.cots.filter(c => cuyNum(c[campo]) != null && !(campo === 'ars_usd' && modo === 'billete' && cuyEsCopiaOfic(c)))
+    .map(c => ({ fecha: String(c.fecha), v: +c[campo], fuente: c[campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu'] || '' }));
+  if (campo !== 'ars_usd' || modo === 'no') return propias;
+  const ya = new Set(propias.map(x => x.fecha));
+  const usaBill = modo === 'billete' && (CUY.bill || []).length;   // si no se puede leer el Billete (falta el SQL), respaldo: USD Oficial vendedor
+  const lado = usaBill ? 'billete' : (modo === 'billete' ? 'venta' : modo);
+  const auto = lado === 'billete'
+    ? (CUY.bill || []).filter(o => !ya.has(String(o.fecha)) && cuyProm(o) > 0).map(o => ({ fecha: String(o.fecha), v: Math.round(cuyProm(o) * 10000) / 10000, fuente: 'USD Billete promedio (dolarapi)', auto: true }))
+    : (CUY.ofic || []).filter(o => !ya.has(String(o.fecha)) && cuyNum(o[lado]) > 0).map(o => ({ fecha: String(o.fecha), v: +o[lado], fuente: 'índice USD Oficial (' + (lado === 'venta' ? 'vendedor' : 'comprador') + ')' + (modo === 'billete' ? ' · respaldo: no se pudo leer el Billete' : ''), auto: true }));
   return propias.concat(auto).sort((a,b) => a.fecha.localeCompare(b.fecha));
 }
 let CUY_SERIE = { ars_usd: [], uyu_usd: [] };
@@ -1348,10 +1363,14 @@ function cuyConv(v, de, a, fecha){
   if (de === 'USD' && a === 'ARS') return ars ? r2(v * ars.v) : null;
   if (de === 'UYU' && a === 'USD') return uyu ? r2(v / uyu.v) : null;
   if (de === 'UYU' && a === 'ARS') return (ars && uyu) ? r2(v / uyu.v * ars.v) : null;
+  if (a === 'UYU') return de === 'UYU' ? r2(v) : (uyu ? r2(v * uyu.v) : null);   // contador UY
   return null;
 }
-const cuyMonAs = mon => mon === 'USD' ? 'USD' : 'ARS';   // moneda del asiento en Tango según la moneda de origen
+// Modo de armado: Tango (por defecto) = USD → DOL, UYU → PES (ARS) · Contador UY (CUY_UY = true) = todo en pesos uruguayos
+let CUY_UY = false;
+const cuyMonAs = mon => CUY_UY ? 'UYU' : (mon === 'USD' ? 'USD' : 'ARS');   // moneda del asiento según la moneda de origen
 function cuyFaltaCot(fecha, mon){   // qué cotización falta para pasar esa moneda a la del asiento
+  if (CUY_UY) return (mon === 'USD' && !cuyCotDe(fecha, 'uyu_usd')) ? ['UYU/USD'] : [];
   const f = []; if (!cuyCotDe(fecha, 'ars_usd')) f.push('ARS/USD'); if (mon === 'UYU' && !cuyCotDe(fecha, 'uyu_usd')) f.push('UYU/USD'); return f;
 }
 function cuyLey(parts){ let out = ''; for (const p of parts.filter(x => x != null && String(x).trim() !== '')) { const c = out ? out + ' - ' + p : String(p); if (c.length > CUY_LEY_MAX && out) break; out = c; } return out.slice(0, CUY_LEY_MAX); }
@@ -1915,7 +1934,12 @@ const cuyClaveRubro = r => 'RUBRO:' + (String(r || '').trim().toUpperCase() || '
 const cuyClaveClasif = c => 'CLASIF:' + (String(c || '').trim().toUpperCase() || '(SIN CLASIFICACIÓN)');
 // Valor de una factura en la moneda del asiento (USD | ARS), con las cotizaciones de la fecha de la factura:
 // es el importe con el que quedó registrada la deuda con el proveedor.
-function cuyFacValor(r, ma){ const mon = cuyEsUSD(r) ? 'USD' : 'UYU'; return cuyConv(cuyNum(mon === 'USD' ? r.total_usd : r.total_uyu) || 0, mon, ma, r.fecha); }
+function cuyFacConv(r, v, ma){ const mon = cuyEsUSD(r) ? 'USD' : 'UYU';
+  if (ma === 'UYU' && mon === 'USD' && cuyNum(r.tc) != null) return r2((+v || 0) * +r.tc);   // contador UY: TC propio de la factura en USD
+  return cuyConv(+v || 0, mon, ma, r.fecha); }
+function cuyFacValor(r, ma){ return cuyFacConv(r, cuyNum(cuyEsUSD(r) ? r.total_usd : r.total_uyu) || 0, ma); }
+// TC (UYU por USD) con que el contador UY ve el asiento en dólares
+const cuyTcUY = (fecha, r) => (r && cuyEsUSD(r) && cuyNum(r.tc) != null) ? +r.tc : ((cuyCotDe(fecha, 'uyu_usd') || {}).v || null);
 // Cuenta del gasto: la del comprobante si la tiene; si no, la del Plan de cuentas según el rubro
 // La cuenta del gasto se define en el comprobante (solapa Comprobantes): no sale del rubro ni del plan.
 const CUY_SIN_CTA = 'FAC_SIN_CUENTA';
@@ -1941,13 +1965,17 @@ function cuyAuxEerr(rubro){
 }
 function cuyAsientoFac(r){
   const mon = cuyEsUSD(r) ? 'USD' : 'UYU', ma = cuyMonAs(mon);
-  const tot = cuyFacValor(r, ma), iva = cuyConv(cuyNum(mon === 'USD' ? r.iva_usd : r.iva_uyu) || 0, mon, ma, r.fecha);
+  const tot = cuyFacValor(r, ma), iva = cuyFacConv(r, cuyNum(mon === 'USD' ? r.iva_usd : r.iva_uyu) || 0, ma);
   const neto = tot == null ? null : r2(tot - (iva || 0));   // el neto absorbe el redondeo: el asiento siempre cierra
   const ley = cuyLey([r.proveedor_cod || r.proveedor, r.serie_numero, r.proyecto]), kR = cuyClaveGasto(r);
   const lineas = [{ clave: kR, monto: neto, leyenda: ley, eerr: r.rubro, auxEerr: cuyAuxEerr(r.rubro), proy: cuyProyCod(r.proyecto) }];
   if (iva) lineas.push({ clave:'IVA_COMPRAS', monto: iva, leyenda: ley });
   lineas.push({ clave: cuyClaveContra(r), monto: tot == null ? null : -tot, leyenda: ley });
-  return { id: r.id, fecha: r.fecha, mon: ma, cot: cuyCotDe(r.fecha, 'ars_usd'), falta: cuyFaltaCot(r.fecha, mon),
+  if (CUY_UY && mon === 'USD') {   // contador UY: equivalente en dólares = los dólares de la factura
+    const tU = cuyNum(r.total_usd) || 0, iU = cuyNum(r.iva_usd) || 0;
+    lineas[0].usd = r2(tU - iU); if (iva) lineas[1].usd = r2(iU); lineas[lineas.length - 1].usd = -r2(tU); }
+  return { id: r.id, fecha: r.fecha, mon: ma, cot: cuyCotDe(r.fecha, 'ars_usd'), tcUY: cuyTcUY(r.fecha, r),
+           falta: (CUY_UY && cuyEsUSD(r) && cuyNum(r.tc) != null) ? [] : cuyFaltaCot(r.fecha, mon),
            concepto: cuyLey([r.tipo_cfe, r.serie_numero, r.proveedor_cod || r.proveedor]), lineas };
 }
 // Contrapartida del asiento de un movimiento:
@@ -1967,6 +1995,15 @@ function cuyContraMov(m){
 const cuyCambioTc = () => cuyPlan('CONFIG:CAMBIO_TC').codigo === 'oficial' ? 'oficial' : 'banco';
 function cuyAsientoCambio(m){
   const e = CUY_ESP[m.id], usd = cuyCta(m.cuenta).mon === 'USD' ? m : e, uyu = usd === m ? e : m, banco = cuyCambioTc() === 'banco';
+  const tcBanco = Math.abs(+uyu.importe) / Math.abs(+usd.importe);
+  if (CUY_UY) {   // contador UY: en pesos uruguayos
+    const vUsd = banco ? r2(-(+uyu.importe)) : cuyConv(+usd.importe, 'USD', 'UYU', usd.fecha), leyU = cuyLey(['Cambio de moneda', 'US$ ' + fmtNum(Math.abs(+usd.importe)), '$U ' + fmtNum(Math.abs(+uyu.importe)), 'TC ' + fmtTC(tcBanco)]);
+    const lin = [{ clave: 'CUENTA:' + usd.cuenta, monto: vUsd, leyenda: leyU, usd: r2(+usd.importe) }, { clave: 'CUENTA:' + uyu.cuenta, monto: r2(+uyu.importe), leyenda: leyU, usd: banco ? r2(-(+usd.importe)) : undefined }];
+    if (vUsd != null) { const resto = r2(-lin.reduce((a,l) => a + l.monto, 0));
+      if (Math.abs(resto) >= 0.01) lin.push({ clave: resto > 0 ? 'DIF_CAMBIO_NEG' : 'DIF_CAMBIO_POS', monto: resto, leyenda: cuyLey(['Dif. de cambio', leyU]), eerr: '' }); }
+    return { id: usd.id, par: [usd.id, uyu.id], fecha: usd.fecha, mon: 'UYU', tcUY: banco ? tcBanco : cuyTcUY(usd.fecha), falta: banco ? [] : cuyFaltaCot(usd.fecha, 'USD'),
+             concepto: cuyLey(['Cambio de moneda', usd.cuenta + ' / ' + uyu.cuenta]), lineas: lin };
+  }
   const vUyu = banco ? r2(-(+usd.importe)) : cuyConv(+uyu.importe, 'UYU', 'USD', uyu.fecha), ley = cuyLey(['Cambio de moneda', 'US$ ' + fmtNum(Math.abs(+usd.importe)), '$U ' + fmtNum(Math.abs(+uyu.importe)), 'TC ' + fmtTC(Math.abs(+uyu.importe) / Math.abs(+usd.importe))]);
   const lineas = [{ clave: 'CUENTA:' + usd.cuenta, monto: r2(+usd.importe), leyenda: ley }, { clave: 'CUENTA:' + uyu.cuenta, monto: vUyu, leyenda: ley }];
   if (vUyu != null) { const resto = r2(-lineas.reduce((a,l) => a + l.monto, 0));
@@ -1983,25 +2020,29 @@ function cuyAsientoMov(m){
     // Pago de facturas: Proveedores se cancela al valor con que se registró cada factura
     // parte de cada factura que cancela este pago (aplicado ÷ total) × valor con que se registró la factura
     // (la deuda se cancela en la contrapartida de cada factura: Proveedores o la cargada en el comprobante)
-    const porCta = {};
+    const porCta = {}, usdCta = {};
     cuyAplDeMov(m.id).forEach(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); if (!c) return;
       const k2 = cuyClaveContra(c), v = cuyFacValor(c, ma), ap = cuyAplEnOrigen(a), tot = cuyFacTotal(c); let val;
-      if (v == null) { cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); val = null; }
+      if (v == null) { (cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').length ? cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU') : ['cotización']).forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); val = null; }
       else if (ap == null) { falta.push('UYU/USD para pasar el pago a la moneda de la factura ' + (c.serie_numero || c.id)); val = null; }
       else val = tot ? r2(v * ap / tot) : 0;
-      porCta[k2] = (k2 in porCta && porCta[k2] == null) || val == null ? null : r2((porCta[k2] || 0) + val); });
-    Object.entries(porCta).forEach(([k2, suma]) => lineas.push({ clave: k2, monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley }));
+      porCta[k2] = (k2 in porCta && porCta[k2] == null) || val == null ? null : r2((porCta[k2] || 0) + val);
+      // contador UY: dólares exactos de lo aplicado a facturas en USD (si alguna es en pesos, el equivalente sale del TC)
+      usdCta[k2] = (k2 in usdCta && usdCta[k2] == null) || !cuyEsUSD(c) || ap == null ? null : r2((usdCta[k2] || 0) + ap); });
+    Object.entries(porCta).forEach(([k2, suma]) => { const l = { clave: k2, monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley };
+      if (CUY_UY && usdCta[k2] != null) l.usd = imp0 < 0 ? usdCta[k2] : -usdCta[k2]; lineas.push(l); });
   } else {
     const res = k !== 'PROVEEDORES';
-    lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, auxEerr: res && m.rubro ? cuyAuxEerr(m.rubro) : '', proy: res ? cuyProyCod(m.auxiliar) : '' });
+    lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, auxEerr: res ? (cuyPlan(k).aux_eerr || (m.rubro ? cuyAuxEerr(m.rubro) : '')) : '', proy: res ? cuyProyCod(m.auxiliar) : '' });
   }
   lineas.push({ clave: 'CUENTA:' + m.cuenta, monto: imp, leyenda: ley });
+  if (CUY_UY && mon === 'USD') { lineas[lineas.length - 1].usd = r2(imp0); if (!comps.length) lineas[0].usd = r2(-imp0); }
   // Lo que no cierra es diferencia de cambio (distinta cotización entre factura y pago, o entre las dos patas del cambio)
   if (lineas.every(l => l.monto != null)) {
     const resto = r2(-lineas.reduce((a,l) => a + l.monto, 0));
     if (Math.abs(resto) >= 0.01) lineas.push({ clave: resto > 0 ? 'DIF_CAMBIO_NEG' : 'DIF_CAMBIO_POS', monto: resto, leyenda: cuyLey(['Dif. de cambio', ley]), eerr: '' });
   }
-  return { id: m.id, fecha: m.fecha, mon: ma, cot: cuyCotDe(m.fecha, 'ars_usd'), falta, concepto: cuyLey([CUY_TIPOS_MOV[m.tipo], m.cuenta, m.concepto]), lineas };
+  return { id: m.id, fecha: m.fecha, mon: ma, cot: cuyCotDe(m.fecha, 'ars_usd'), tcUY: cuyTcUY(m.fecha), falta, concepto: cuyLey([CUY_TIPOS_MOV[m.tipo], m.cuenta, m.concepto]), lineas };
 }
 function cuyAsientoHojas(asientos){
   const cab = [['Identificador','Fecha de asiento','Clase de asiento','Código de tipo de asiento','Estado','Código de moneda','Concepto','Observaciones','Eliminar','ROW_VERSION']];
@@ -2058,6 +2099,47 @@ function cuyAsientoExportar(asientos, nombre){
   document.getElementById('ae-cot').addEventListener('click', () => { cerrarModal(); CUY.tab = 'cot'; cuyRender(); });
   document.getElementById('ae-igual').addEventListener('click', () => { cerrarModal(); cuyAsientoBajar(asientos, nombre); });
 }
+// Para el contador de Uruguay: los mismos asientos (facturación y bancos) en pesos uruguayos y su equivalente en dólares,
+// más el registro de compras y los movimientos de bancos / caja. Criterio: facturas USD con su TC; cambios de moneda al TC
+// del banco; el resto con la cotización interbancaria DGI (día hábil anterior, según Cotizaciones).
+function cuyExportarUY(){
+  if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+  CUY_ESP = cuyEspejos(); cuySerieArmar();
+  const movs = CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
+  let asientos;
+  CUY_UY = true;
+  try { asientos = CUY.lista.map(r => Object.assign(cuyAsientoFac(r), { tipo:'Factura' })).concat(movs.map(m => Object.assign(cuyAsientoMov(m), { tipo:'Banco / caja' }))); }
+  finally { CUY_UY = false; }
+  asientos.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)) || (a.tipo === 'Factura' ? -1 : 1));
+  const nom = k => { const p = cuyPlan(k); return k === CUY_SIN_CTA ? ['', '(falta cuenta en Comprobantes)'] : [p.codigo || '', p.nombre || (p.codigo && (cuyDicCta(p.codigo) || {}).desc) || k]; };
+  const filas = [], faltas = [];
+  asientos.forEach(a => { if (a.falta.length) faltas.push(a.id);
+    const lins = a.lineas.filter(l => l.monto == null || r2(l.monto)), tc = a.tcUY;
+    const usdDe = l => l.usd != null ? l.usd : ((l.monto != null && tc) ? r2(l.monto / tc) : null);
+    const noDif = lins.filter(l => !String(l.clave).startsWith('DIF_CAMBIO')), sumNoDif = noDif.every(l => usdDe(l) != null) ? r2(noDif.reduce((x,l) => x + usdDe(l), 0)) : null;
+    lins.forEach((l, i) => { const [cod, n] = nom(l.clave), u = l.monto;
+      const d = String(l.clave).startsWith('DIF_CAMBIO') ? (sumNoDif == null ? null : r2(-sumNoDif)) : usdDe(l);   // en dólares, la dif. de cambio es lo que falte para cerrar (suele ser 0)
+      filas.push({ 'Asiento': a.id, 'Tipo': a.tipo, 'Fecha': a.fecha, 'Mes': String(a.fecha).slice(0,7), 'Concepto': a.concepto, 'Renglón': i + 1, 'Cuenta': cod, 'Nombre de la cuenta': n,
+        'Debe $U': u > 0 ? u : null, 'Haber $U': u < 0 ? -u : null, 'TC (UYU/USD)': tc, 'Debe US$': d > 0 ? d : null, 'Haber US$': d < 0 ? -d : null,
+        'Leyenda': l.leyenda || '', 'Falta cotización': a.falta.length ? [...new Set(a.falta)].join(', ') : '' }); }); });
+  const compras = CUY.lista.slice().sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))).map(r => { const usd = cuyEsUSD(r), tc = cuyTcUY(r.fecha, r);
+    const tot = cuyNum(usd ? r.total_usd : r.total_uyu), iva = cuyNum(usd ? r.iva_usd : r.iva_uyu) || 0;
+    const totU = tot == null ? null : (usd ? (tc ? r2(tot * tc) : null) : tot), totD = tot == null ? null : (usd ? tot : (tc ? r2(tot / tc) : null));
+    return { 'Fecha': r.fecha, 'Mes': String(r.fecha).slice(0,7), 'Proveedor': r.proveedor || '', 'RUT': r.rut_emisor || '', 'Tipo CFE': r.tipo_cfe || '', 'Serie / N°': r.serie_numero || '', 'Concepto': r.concepto || '',
+      'Rubro': r.rubro || '', 'Proyecto': r.proyecto || '', 'Moneda': usd ? 'USD' : 'UYU', 'Neto origen': tot == null ? null : r2(tot - iva), 'IVA origen': iva, 'Total origen': tot, 'TC (UYU/USD)': tc,
+      'Total $U': totU, 'Total US$': totD, 'Cuenta contable': r.cuenta_gasto || '', 'Estado': r.estado_pago || '', 'Conciliación': cuyCompConc(r), 'Anulada': r.anulada ? 'Sí' : '', 'Doc. relacionado': r.doc_relacionado || '' }; });
+  const bancos = CUY.movs.slice().sort((a,b) => String(a.cuenta).localeCompare(String(b.cuenta)) || String(a.fecha).localeCompare(String(b.fecha))).map(m => { const mon = cuyCta(m.cuenta).mon, es = CUY_ESP[m.id];
+    const tc = (es && cuyEsCambio(m) && cuyCambioTc() === 'banco') ? cuyTcCambio(m) : cuyTcUY(m.fecha), imp = +m.importe;
+    return { 'Cuenta': m.cuenta, 'Fecha': m.fecha, 'Mes': String(m.fecha).slice(0,7), 'Tipo': CUY_TIPOS_MOV[m.tipo] || m.tipo, 'Concepto': m.concepto || '', 'Moneda': mon, 'Importe origen': imp, 'TC (UYU/USD)': tc,
+      'Importe $U': mon === 'UYU' ? imp : (tc ? r2(imp * tc) : null), 'Importe US$': mon === 'USD' ? imp : (tc ? r2(imp / tc) : null), 'Conciliación': cuyMovEstado(m),
+      'Facturas': cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); return c ? (c.proveedor || '') + ' ' + (c.serie_numero || c.id) : ''; }).join(' / ') }; });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas.length ? filas : [{ 'Asiento':'(sin asientos)' }]), 'Asientos UYU-USD');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(compras.length ? compras : [{ 'Fecha':'(sin comprobantes)' }]), 'Compras');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bancos.length ? bancos : [{ 'Cuenta':'(sin movimientos)' }]), 'Bancos y caja');
+  XLSX.writeFile(wb, 'Contabilidad_UY_para_contador_' + hoyISO() + '.xlsx');
+  toast('Excel para el contador UY generado' + (faltas.length ? ' · ⚠ ' + faltas.length + ' asiento(s) sin cotización UYU/USD (columna "Falta cotización")' : ''));
+}
 const cuyRegistrado = x => !!String(x.asiento_num || '').trim();
 function cuyRenderAsientos(){
   const fac = CUY.asTab === 'fac', ns = fac ? 'afac' : 'amov', sel = CUY.sel[fac ? 'fac' : 'mov'];
@@ -2100,7 +2182,8 @@ function cuyRenderAsientos(){
   TABLAS[ns] = { cols, base: () => base };
   const filas = tablaFiltrar(ns, cols, base, txt);
   const pend = filas.filter(x => !cuyRegistrado(x)), elegidas = base.filter(x => sel.has(x.id));
-  document.getElementById('topActions').innerHTML = '<button class="btn" id="as-xls">' + ICO.xls + 'Exportar asiento (Tango)' + (elegidas.length ? ' · ' + elegidas.length + ' tildados' : ' · ' + pend.length + ' pendientes') + '</button>';
+  document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="as-uy" title="Facturación y bancos en pesos uruguayos y dólares, más registro de compras y movimientos">' + ICO.xls + 'Para el contador UY ($U / US$)</button><button class="btn" id="as-xls">' + ICO.xls + 'Exportar asiento (Tango)' + (elegidas.length ? ' · ' + elegidas.length + ' tildados' : ' · ' + pend.length + ' pendientes') + '</button>';
+  document.getElementById('as-uy').addEventListener('click', cuyExportarUY);
   document.getElementById('as-xls').addEventListener('click', () => cuyAsientoExportar((elegidas.length ? elegidas : pend).map(asDe), fac ? 'Asiento_Tango_UY_facturas' : 'Asiento_Tango_UY_pagos'));
   const sub = '<div class="mtabs" style="margin:-4px 0 14px"><button class="mtab' + (fac ? ' active' : '') + '" data-astab="fac">Registro de facturas</button><button class="mtab' + (!fac ? ' active' : '') + '" data-astab="mov">Pagos y gastos bancarios</button></div>';
   const reg = base.filter(cuyRegistrado).length;
@@ -2139,7 +2222,8 @@ async function cuyCotGuardar(fecha, cambios){
 }
 function cuyRenderCot(){
   const ta = document.getElementById('topActions');
-  ta.innerHTML = SP.editar && !CUY.cotErr ? '<button class="btn" id="ct-imp">' + ICO.upload + 'Importar cotizaciones</button><button class="btn ghost" id="ct-api">Traer UYU/USD de hoy (dolarapi)</button><button class="btn ghost" id="ct-camb">Completar UYU/USD con los cambios del banco</button><button class="btn ghost" id="ct-tc">Completar TC de facturas USD</button>' : '';
+  const copias = CUY.cots.filter(c => cuyNum(c.ars_usd) != null && cuyEsCopiaOfic(c));
+  ta.innerHTML = SP.editar && !CUY.cotErr ? (copias.length ? '<button class="btn danger" id="ct-limp" title="ARS/USD copiados del USD Oficial con el botón anterior: tapan el índice Billete">Quitar ' + copias.length + ' ARS/USD copiados del Oficial</button>' : '') + '<button class="btn" id="ct-imp">' + ICO.upload + 'Importar cotizaciones</button><button class="btn ghost" id="ct-api">Traer UYU/USD de hoy (dolarapi)</button><button class="btn ghost" id="ct-camb">Completar UYU/USD con los cambios del banco</button><button class="btn ghost" id="ct-tc">Completar TC de facturas USD</button>' : '';
   if (CUY.cotErr) { $main.innerHTML = cuyTabs() + '<div class="card"><div class="empty">No pude leer las cotizaciones: ' + esc(CUY.cotErr) + '<br><span class="muted">Falta correr sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql en Supabase.</span></div></div>'; cuyTabsEventos(); return; }
   // Una fila por fecha cargada o usada por una factura / movimiento
   const usos = {}; CUY.lista.forEach(r => { if (r.fecha) usos[r.fecha] = (usos[r.fecha] || 0) + 1; }); CUY.movs.forEach(m => { if (m.tipo !== 'saldo_inicial') usos[m.fecha] = (usos[m.fecha] || 0) + 1; });
@@ -2168,13 +2252,17 @@ function cuyRenderCot(){
   $main.innerHTML = cuyTabs()
     + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango: USD → DOL con la cotización <b>ARS/USD</b>; UYU → PES, pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
     + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.gub.uy/direccion-general-impositiva/datos-y-estadisticas/datos/cotizaciones-interbancarias" target="_blank" rel="noopener">cotizaciones interbancarias de la DGI</a> y subilo con "Importar cotizaciones". '
-    + 'ARS/USD: sale solo del <b>índice USD Oficial</b> del diccionario (el que usa EERR' + (CUY.oficErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.oficErr) + '</span>' : (CUY.ofic && CUY.ofic.length ? ', hasta el ' + fmtFecha(CUY.ofic[CUY.ofic.length - 1].fecha) : '')) + '); ojo: no es BNA divisa. Si cargás un valor acá (a mano o importado), ese manda. '
+    + (cuyArsAuto() === 'billete'
+        ? 'ARS/USD: sale solo del <b>USD Billete promedio</b> (compra/venta) que registra Compras desde dolarapi — la "Cotización Billete" de Tango' + (CUY.billErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.billErr) + ' (falta correr sql/2026-10_contabilidad_uy_usd_billete.sql)</span>' : (CUY.bill && CUY.bill.length ? ', hasta el ' + fmtFecha(CUY.bill[CUY.bill.length - 1].fecha) : '')) + '. '
+        : 'ARS/USD: sale del índice USD Oficial del diccionario' + (CUY.oficErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.oficErr) + '</span>' : '') + '. ')
+    + 'Si cargás un valor acá (a mano o importado), ese manda. '
     + (faltan ? '<b class="warn">' + faltan + ' fecha(s) con facturas o movimientos sin cotización o con una cotización de más de 5 días antes (falta cargar ese período).</b>' : '') + '</div>'
     + '<div class="card">' + cardH('Cotizaciones por día', 'Una fila por fecha con facturas o movimientos. Se guarda al salir de la casilla (o con Enter). En gris dentro de la casilla: la cotización que se está usando.')
     + '<div class="tools" style="padding-bottom:0">'
     +   (SP.editar ? '<input type="date" id="ct-nf" class="tc-in" style="width:140px;text-align:left"><button class="btn ghost sm" id="ct-add">Agregar fecha</button>' : '')
     +   '<span style="margin-left:auto;font-size:12px;color:var(--muted)">ARS/USD automático:</span>'
     +   '<select id="ct-ars" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
+    +     '<option value="billete"' + (cuyArsAuto() === 'billete' ? ' selected' : '') + '>USD Billete promedio (Tango)</option>'
     +     '<option value="venta"' + (cuyArsAuto() === 'venta' ? ' selected' : '') + '>índice USD Oficial, vendedor</option>'
     +     '<option value="compra"' + (cuyArsAuto() === 'compra' ? ' selected' : '') + '>índice USD Oficial, comprador</option>'
     +     '<option value="no"' + (cuyArsAuto() === 'no' ? ' selected' : '') + '>no, solo lo cargado acá</option></select>'
@@ -2201,10 +2289,14 @@ function cuyRenderCot(){
   on('ct-add', async () => { const f = document.getElementById('ct-nf').value; if (!f) { toast('Elegí la fecha'); return; }
     try { await cuyCotGuardar(f, {}); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   on('ct-api', cuyCotDolarApi); on('ct-camb', cuyCotDesdeCambios); on('ct-tc', cuyCotTcFacturas); on('ct-imp', cuyCotImportar);
+  on('ct-limp', async () => { try { for (let i = 0; i < copias.length; i += 500) { const lote = copias.slice(i, i + 500).map(c => ({ fecha: c.fecha, ars_usd: null, fuente_ars: null }));
+      const { data, error } = await sb.from(CUY_COT_T).upsert(lote, { onConflict:'fecha' }).select(); if (error) throw error;
+      (data || []).forEach(d => { const k = CUY.cots.findIndex(x => x.fecha === d.fecha); if (k >= 0) CUY.cots[k] = d; }); }
+    cuySerieArmar(); toast(copias.length + ' ARS/USD del Oficial quitados: ahora toman el USD Billete'); cuyRender(); } catch (e) { toast('No se pudo: ' + (e.message || e)); } });
   const ct = document.getElementById('ct-camtc');
   if (ct) ct.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:CAMBIO_TC', { codigo: ct.value, nombre: 'TC de los cambios de moneda' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const ao = document.getElementById('ct-ars');
-  if (ao) ao.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_AUTO', { codigo: ao.value, nombre: 'ARS/USD automático desde el índice USD Oficial' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
+  if (ao) ao.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_AUTO', { codigo: ao.value, nombre: 'ARS/USD automático' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const md = document.getElementById('ct-modo');
   if (md) md.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:COT_DIA', { codigo: md.value, nombre: 'Cotización: día anterior / mismo día' }); toast('Criterio guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
 }
