@@ -1307,7 +1307,7 @@ const cuyDicEerr = cod => CUY.dic.eerr.find(c => c.cod === String(cod || '').tri
 
 /* Cotizaciones (adminfin_cuy_cotizaciones): ars_usd = pesos argentinos por USD (BNA divisa), uyu_usd = pesos
    uruguayos por USD. Para una fecha se usa la cotización de ese día o, si no hay, la última anterior.
-   Contabilidad en Tango: lo que está en USD va en DOL (cotización ars_usd); lo que está en UYU va en PES,
+   Contabilidad en Tango: todo en PES. Lo que está en USD × ars_usd (billete); lo que está en UYU,
    pasado a ARS por el dólar: UYU ÷ uyu_usd × ars_usd. Conciliación: siempre en la moneda del banco. */
 const CUY_COT_T = 'adminfin_cuy_cotizaciones', CUY_CIE_T = 'adminfin_cuy_cierres';
 async function cuyCargarCot(){
@@ -1369,7 +1369,7 @@ function cuyConv(v, de, a, fecha){
   if (a === 'UYU') return de === 'UYU' ? r2(v) : (uyu ? r2(v * uyu.v) : null);   // contador UY
   return null;
 }
-// Modo de armado: Tango (por defecto) = USD → DOL, UYU → PES (ARS) · Contador UY (CUY_UY = true) = todo en pesos uruguayos
+// Modo de armado: Tango (por defecto) = todo en PES (ARS) · Contador UY (CUY_UY = true) = todo en pesos uruguayos
 let CUY_UY = false;
 // Tango: TODO en pesos argentinos (PES). USD × billete promedio del día; UYU ÷ DGI × billete. Tango aplica su cotización
 // billete de la fecha del asiento para el equivalente en dólares.
@@ -1992,7 +1992,7 @@ function cuyContraMov(m){
   if (String(m.contrapartida || '').trim()) return 'COD:' + String(m.contrapartida).trim();
   return m.tipo === 'gasto_bancario' ? 'CLASIF:GASTOS BANCARIOS' : cuyClaveClasif(m.clasificacion);
 }
-// Cambio de moneda: UN asiento por par, en DOL (la cuenta en dólares conserva sus US$), Debe/Haber las dos cuentas del Santander.
+// Cambio de moneda: UN asiento por par (en PES para Tango, en $U para el contador UY), Debe/Haber las dos cuentas del Santander.
 // TC (Cotizaciones, CONFIG:CAMBIO_TC): 'banco' (por defecto) = el que aplicó el banco: la pata en pesos vale lo mismo que la
 // de dólares y no hay diferencia de cambio en el asiento (la diferencia con el oficial aparece al revaluar el saldo al cierre);
 // 'oficial' = los pesos a dólares con UYU/USD DGI y lo que no cierra va a diferencia de cambio.
@@ -2206,7 +2206,7 @@ function cuyRenderAsientos(){
   const sub = '<div class="mtabs" style="margin:-4px 0 14px"><button class="mtab' + (fac ? ' active' : '') + '" data-astab="fac">Registro de facturas</button><button class="mtab' + (!fac ? ' active' : '') + '" data-astab="mov">Pagos y gastos bancarios</button></div>';
   const reg = base.filter(cuyRegistrado).length;
   const meta = fac ? 'Una por comprobante: Debe gasto (cuenta del rubro, neto) + Debe IVA compras · Haber Proveedores (total). Todo en PES (pesos argentinos): USD × billete promedio del día; UYU ÷ DGI × billete. Notas de crédito en negativo: el asiento sale invertido.'
-    : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda entre Santander USD y pesos (un solo asiento por el par, cuenta contra cuenta, en DOL; la pata en pesos no aparece aparte), transferencias e ingresos (contra la cuenta cargada en el movimiento o, si no, la de su clasificación). Todo en PES (pesos argentinos).';
+    : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda entre Santander USD y pesos (un solo asiento por el par, cuenta contra cuenta; la pata en pesos no aparece aparte), transferencias e ingresos (contra la cuenta cargada en el movimiento o, si no, la de su clasificación). Todo en PES (pesos argentinos).';
   $main.innerHTML = cuyTabs() + sub
     + '<div class="meta-bar">Se exportan los tildados; si no tildás nada, los <b>pendientes</b> que se ven con los filtros. Todo en <b>pesos argentinos</b> y <b>un asiento por día</b> (Tango aplica la cotización billete de esa fecha). Se importan en Tango en Borrador; después de revisarlos cargá el N° de asiento acá para dejar constancia de que quedaron registrados (' + reg + ' de ' + base.length + ' registrados).</div>'
     + '<div class="card">' + cardH(fac ? 'Registro de facturas' : 'Pagos y gastos bancarios', meta)
@@ -2271,7 +2271,7 @@ function cuyRenderCot(){
   const f = tablaFiltrar('cot', cols, filas, x => x.fecha + ' ' + fmtFecha(x.fecha));
   const faltan = filas.filter(x => x.usos && est(x) !== 'Con cotización').length;
   $main.innerHTML = cuyTabs()
-    + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango: USD → DOL con la cotización <b>ARS/USD</b>; UYU → PES, pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
+    + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango, todo en pesos argentinos (PES): USD × <b>ARS/USD</b>; UYU pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
     + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.gub.uy/direccion-general-impositiva/datos-y-estadisticas/datos/cotizaciones-interbancarias" target="_blank" rel="noopener">cotizaciones interbancarias de la DGI</a> y subilo con "Importar cotizaciones". '
     + (cuyArsAuto() === 'billete'
         ? 'ARS/USD: sale solo del <b>USD Billete promedio</b> (compra/venta) que registra Compras desde dolarapi — la "Cotización Billete" de Tango' + (CUY.billErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.billErr) + ' (falta correr sql/2026-10_contabilidad_uy_usd_billete.sql)</span>' : (CUY.bill && CUY.bill.length ? ', hasta el ' + fmtFecha(CUY.bill[CUY.bill.length - 1].fecha) : '')) + '. '
