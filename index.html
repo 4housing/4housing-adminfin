@@ -968,6 +968,11 @@ function cuyCols(){
     { id:'mon', t:'Moneda', v:r => r.origen_moneda || '', td:r => esc(r.origen_moneda || '') },
     { id:'orig', t:'Total origen', s:r => cuyNum(cuyEsUSD(r) ? r.total_usd : r.total_uyu), cls:'num',
       td:r => cuyEsUSD(r) ? (r.total_usd == null ? '—' : 'US$ ' + fmtNum(r.total_usd)) : fmtUYU(cuyNum(r.total_uyu)) },
+    { id:'ctag', t:'Cuenta contable', v:r => String(r.cuenta_gasto || '').trim() ? (String(r.cuenta_gasto).trim() + ' ' + ((cuyDicCta(r.cuenta_gasto) || {}).desc || '')).trim() : '(sin cuenta)',
+      s:r => r.cuenta_gasto || '', td:r => { const c = String(r.cuenta_gasto || '').trim(), d = c ? cuyDicCta(c) : null, sg = c ? null : cuySugCuenta(r);
+        return (SP.editar ? '<input class="tc-in' + (c ? '' : ' vacio') + '" style="width:96px;text-align:left" list="dl-cuy-cta" data-cg="' + esc(r.id) + '" value="' + esc(c) + '" placeholder="' + esc(sg ? sg.cod : 'cuenta') + '" title="Cuenta contable del gasto (Tango). Enter o salir de la casilla para guardar.">' : esc(c || '—'))
+          + (c ? '<div class="muted">' + (d ? esc(d.desc) : (CUY.dic.cuentas.length ? '<span class="warn">⚠ no está en el diccionario</span>' : '')) + '</div>'
+               : '<div class="muted warn">' + (sg ? 'sugerida ' + esc(sg.cod) + ' (' + esc(sg.por) + ')' : 'falta') + '</div>'); } },
     { id:'tc', t:'TC', v:r => !cuyEsUSD(r) ? 'No aplica (pesos)' : (cuyTcPend(r) ? 'TC pendiente' : 'Con TC'), s:r => cuyNum(r.tc), cls:'num',
       td:r => !cuyEsUSD(r) ? '<span class="muted">—</span>'
         : (SP.editar ? '<input class="tc-in' + (cuyTcPend(r) ? ' vacio' : '') + '" type="number" step="0.001" min="0" inputmode="decimal" data-tc="' + esc(r.id) + '" value="' + esc(r.tc == null ? '' : r.tc) + '" placeholder="pendiente" title="Cotización UYU por USD de esta factura">'
@@ -992,8 +997,11 @@ const cuyTexto = r => [r.proveedor, r.rut_emisor, r.proveedor_cod, r.serie_numer
 function cuyFiltradas(){ const cols = cuyCols(); TABLAS.cuy = { cols, base:() => CUY.lista }; return { cols, filas: tablaFiltrar('cuy', cols, CUY.lista, cuyTexto) }; }
 
 function cuyRenderComp(){
+  const sinCta = CUY.lista.filter(r => !String(r.cuenta_gasto || '').trim()), conSug = sinCta.filter(r => cuySugCuenta(r));
   document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="cuy-xls">' + ICO.xls + 'Exportar Excel</button>'
+    + (SP.editar && conSug.length ? '<button class="btn ghost" id="cuy-sug">Completar ' + conSug.length + ' cuenta' + (conSug.length === 1 ? '' : 's') + ' sugerida' + (conSug.length === 1 ? '' : 's') + '</button>' : '')
     + (SP.editar ? '<button class="btn" id="cuy-nuevo">' + ICO.plus + 'Nuevo comprobante</button>' : '');
+  const bs = document.getElementById('cuy-sug'); if (bs) bs.addEventListener('click', () => cuyCompletarCuentas(conSug));
   document.getElementById('cuy-xls').addEventListener('click', cuyExportar);
   const bn = document.getElementById('cuy-nuevo'); if (bn) bn.addEventListener('click', () => cuyForm(null));
 
@@ -1006,7 +1014,8 @@ function cuyRenderComp(){
     + '<div class="kpi"><div class="kpi-label">Total en pesos</div><div class="kpi-value">' + fmtUYU(suma('total')) + '</div><div class="kpi-sub">' + parcial + '</div></div>'
     + '<div class="kpi"><div class="kpi-label">IVA compras</div><div class="kpi-value">' + fmtUYU(suma('iva')) + '</div><div class="kpi-sub">Neto ' + fmtUYU(suma('neto')) + '</div></div>'
     + '<div class="kpi"><div class="kpi-label">Subtotal USD</div><div class="kpi-value">US$ ' + fmtNum(usd) + '</div><div class="kpi-sub">Facturas en dólares (la N/C netea la anulada)</div></div>'
-    + '<div class="kpi"><div class="kpi-label">Para revisar</div><div class="kpi-value' + ((sinTc || conObs) ? ' warn' : '') + '">' + filas.filter(cuyRevisar).length + '</div><div class="kpi-sub">' + sinTc + ' TC pendiente' + (sinTc === 1 ? '' : 's') + ' · ' + conObs + ' con observaciones</div></div>'
+    + '<div class="kpi"><div class="kpi-label">Para revisar</div><div class="kpi-value' + ((sinTc || conObs) ? ' warn' : '') + '">' + filas.filter(cuyRevisar).length + '</div><div class="kpi-sub">' + sinTc + ' TC pendiente' + (sinTc === 1 ? '' : 's') + ' · ' + conObs + ' con observaciones'
+    +   (sinCta.length ? ' · <span class="warn">' + sinCta.length + ' sin cuenta contable</span>' : '') + '</div></div>'
     + '</div>';
   const iN = cols.findIndex(c => c.id === 'neto');
   const pie = '<tfoot><tr><td colspan="' + iN + '" class="num"><b>Total (' + filas.length + (filas.length !== CUY.lista.length ? ' de ' + CUY.lista.length : '') + ')' + (sinTc ? ' · parcial' : '') + '</b></td>'
@@ -1020,6 +1029,16 @@ function cuyRenderComp(){
       : '<div class="empty">Todavía no hay comprobantes' + (SP.editar ? ': cargá el primero con "Nuevo comprobante".' : '.') + '</div>')
     + '</div>';
   tablaEventos(); cuyTabsEventos();
+  $main.insertAdjacentHTML('beforeend', '<datalist id="dl-cuy-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>');
+  $main.querySelectorAll('input[data-cg]').forEach(inp => {
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    inp.addEventListener('change', async () => {
+      const v = inp.value.trim();
+      if (v && CUY.dic.cuentas.length && !cuyDicCta(v)) { toast('La cuenta ' + v + ' no está en el diccionario'); inp.value = ''; return; }
+      try { await cuyUpdate(inp.dataset.cg, { cuenta_gasto: v || null }); toast(v ? 'Cuenta ' + v + ' guardada' : 'Cuenta borrada'); cuyRender(); }
+      catch (e) { toast('No se guardó: ' + (e.message || e)); }
+    });
+  });
   $main.querySelectorAll('input[data-tc]').forEach(inp => {
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
     inp.addEventListener('change', () => cuyGuardarTc(inp.dataset.tc, inp.value));
@@ -1063,6 +1082,21 @@ async function cuyGuardarTc(id, valor){
   } catch (e) { toast('No se guardó el TC: ' + (e.message || e)); cuyRender(); }
 }
 
+// Carga la cuenta sugerida (último proveedor igual / rubro) en los comprobantes que no tienen cuenta, previa confirmación
+function cuyCompletarCuentas(lista){
+  const items = lista.map(r => ({ r, s: cuySugCuenta(r) })).filter(x => x.s);
+  abrirModal('Completar cuentas contables',
+    '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52">Se carga la cuenta sugerida en cada comprobante sin cuenta. Revisalas: después se cambian en la columna "Cuenta contable".</p><div class="hist" style="max-height:360px">'
+    + items.map(x => '<div class="it">' + esc(x.r.proveedor || '') + ' ' + esc(x.r.serie_numero || '') + ' · ' + esc(x.r.rubro || '') + ' → <b>' + esc(x.s.cod) + '</b> ' + esc((cuyDicCta(x.s.cod) || {}).desc || '') + ' <span class="muted">(' + esc(x.s.por) + ')</span></div>').join('')
+    + '</div><div class="err" id="cc-err"></div>',
+    '<button class="btn ghost" id="cc-no">Cancelar</button><button class="btn" id="cc-si">Completar ' + items.length + '</button>', 'wide');
+  document.getElementById('cc-no').addEventListener('click', cerrarModal);
+  document.getElementById('cc-si').addEventListener('click', async () => {
+    try { for (const x of items) await cuyUpdate(x.r.id, { cuenta_gasto: x.s.cod }); cerrarModal(); toast(items.length + ' cuentas cargadas'); cuyRender(); }
+    catch (e) { document.getElementById('cc-err').textContent = 'Error: ' + (e.message || e); }
+  });
+}
+
 /* ---------- Alta / edición ---------- */
 function cuyForm(id, preset){
   const r = id ? CUY.lista.find(x => x.id === id) : null; if (id && !r) return;
@@ -1088,7 +1122,7 @@ function cuyForm(id, preset){
     + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.lista.map(x => x.proveedor)) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
     + dl('dl-proy', CUY.lista.map(x => x.proyecto)) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', CUY_CTAS.map(x => x.n).concat(CUY.lista.map(x => x.cuenta)))
     + '<div class="box"><h4>Imputación contable</h4>'
-    +   '<div class="frow c2">' + inp('cf-cgasto','Cuenta de gasto (Tango) — opcional', c.cuenta_gasto, ' list="dl-cf-cta"') + inp('cf-ccontra','Contrapartida (Tango) — opcional', c.cuenta_contra, ' list="dl-cf-cta"') + '</div>'
+    +   '<div class="frow c2">' + inp('cf-cgasto','Cuenta contable del gasto (Tango) *', c.cuenta_gasto, ' list="dl-cf-cta"') + inp('cf-ccontra','Contrapartida (Tango) — opcional', c.cuenta_contra, ' list="dl-cf-cta"') + '</div>'
     +   '<div id="cf-imp" style="margin-top:8px"></div></div>'
     + '<datalist id="dl-cf-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>'
     + '<div class="err" id="cf-err"></div>';
@@ -1111,7 +1145,7 @@ function cuyForm(id, preset){
       total_usd: usd ? tot : null, iva_usd: usd ? n('cf-iva') : null, total_uyu: usd ? null : tot, iva_uyu: usd ? null : n('cf-iva'),
       cuenta_gasto: $('cf-cgasto').value.trim(), cuenta_contra: $('cf-ccontra').value.trim() };
     const ph = (id, k) => { const p = cuyPlan(k); $(id).placeholder = p.codigo ? p.codigo + ' · ' + (p.nombre || '') + ' (por defecto)' : 'sin cuenta por defecto: elegí una'; };
-    ph('cf-cgasto', cuyClaveRubro(t.rubro)); ph('cf-ccontra', 'PROVEEDORES');
+    const sg = cuySugCuenta(t); $('cf-cgasto').placeholder = sg ? 'sugerida ' + sg.cod + ' (' + sg.por + ')' : 'elegí la cuenta del gasto'; ph('cf-ccontra', 'PROVEEDORES');
     if (tot == null || !t.fecha) { $('cf-imp').innerHTML = '<div class="muted">Completá fecha y total para ver el asiento.</div>'; return; }
     const a = cuyAsientoFac(t), cta = k => { const p = cuyPlan(k); return p.codigo ? '<b>' + esc(p.codigo) + '</b> ' + esc(p.nombre || (cuyDicCta(p.codigo) || {}).desc || '') : '<span class="warn">⚠ sin cuenta (' + esc(k) + ')</span>'; };
     const filas = a.lineas.filter(l => l.monto == null || r2(l.monto)).map(l => '<tr><td>' + cta(l.clave) + (l.auxEerr ? '<div class="muted">aux. EERR ' + esc(l.auxEerr) + ' · ' + esc(t.rubro) + '</div>' : (l.eerr ? '<div class="muted warn">sin aux. EERR para ' + esc(t.rubro || 'el rubro') + '</div>' : '')) + (l.proy ? '<div class="muted">proyecto ' + esc(l.proy) + '</div>' : '') + '</td>'
@@ -1883,13 +1917,26 @@ const cuyClaveClasif = c => 'CLASIF:' + (String(c || '').trim().toUpperCase() ||
 // es el importe con el que quedó registrada la deuda con el proveedor.
 function cuyFacValor(r, ma){ const mon = cuyEsUSD(r) ? 'USD' : 'UYU'; return cuyConv(cuyNum(mon === 'USD' ? r.total_usd : r.total_uyu) || 0, mon, ma, r.fecha); }
 // Cuenta del gasto: la del comprobante si la tiene; si no, la del Plan de cuentas según el rubro
-const cuyClaveGasto = r => String(r.cuenta_gasto || '').trim() ? 'COD:' + String(r.cuenta_gasto).trim() : cuyClaveRubro(r.rubro);
+// La cuenta del gasto se define en el comprobante (solapa Comprobantes): no sale del rubro ni del plan.
+const CUY_SIN_CTA = 'FAC_SIN_CUENTA';
+const cuyClaveGasto = r => String(r.cuenta_gasto || '').trim() ? 'COD:' + String(r.cuenta_gasto).trim() : CUY_SIN_CTA;
+// Cuenta sugerida para un comprobante sin cuenta: la última usada con el mismo proveedor; si no, la que tenía el rubro en el plan
+function cuySugCuenta(r){
+  const prov = fold(r.proveedor_cod || r.proveedor || '');
+  const prev = CUY.lista.filter(x => x.id !== r.id && String(x.cuenta_gasto || '').trim() && prov && fold(x.proveedor_cod || x.proveedor || '') === prov)
+    .sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)))[0];
+  if (prev) return { cod: String(prev.cuenta_gasto).trim(), por: 'mismo proveedor' };
+  const pl = CUY.plan[cuyClaveRubro(r.rubro)]; if (pl && pl.codigo) return { cod: pl.codigo, por: 'rubro ' + (r.rubro || '') };
+  return null;
+}
 // Contrapartida (deuda): la del comprobante si la tiene; si no, Proveedores
 const cuyClaveContra = r => String(r.cuenta_contra || '').trim() ? 'COD:' + String(r.cuenta_contra).trim() : 'PROVEEDORES';
 // Aux 02 EERR del rubro: el cargado en el Plan de cuentas; si no, la opción del diccionario con el mismo nombre (ej. "K) ESTRUCTURA")
 function cuyAuxEerr(rubro){
   const p = cuyPlan(cuyClaveRubro(rubro)); if (p.aux_eerr) return p.aux_eerr;
-  const n = fold(rubro).replace(/\s+/g,' ').trim(), o = n && CUY.dic.eerr.find(x => fold(x.desc).replace(/\s+/g,' ').trim() === n);
+  const norm = t => fold(t).replace(/\s+/g,' ').trim(), sinLetra = t => norm(t).replace(/^[a-z]\)\s*/,'');
+  const n = norm(rubro); if (!n) return '';
+  const o = CUY.dic.eerr.find(x => norm(x.desc) === n) || CUY.dic.eerr.filter(x => sinLetra(x.desc) === sinLetra(rubro)).length === 1 && CUY.dic.eerr.find(x => sinLetra(x.desc) === sinLetra(rubro));
   return o ? o.cod : '';
 }
 function cuyAsientoFac(r){
@@ -2004,7 +2051,7 @@ function cuyAsientoExportar(asientos, nombre){
   if (!faltan.length && !s.sinCot.length) { cuyAsientoBajar(asientos, nombre); return; }
   abrirModal('Faltan datos para el asiento',
     '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52;line-height:1.5">Así como está, Tango lo va a rechazar o va a quedar incompleto. Completá el <b>Plan de cuentas</b> y las <b>Cotizaciones</b> y volvé a exportar.</p><div class="hist" style="max-height:300px">'
-    + faltan.map(k => '<div class="it"><b>' + esc(k) + '</b>' + (k.includes('no está en el diccionario') || k.includes('auxiliares') ? '' : ' sin código') + ' · ' + s.falta[k].length + ' asiento(s)</div>').join('')
+    + faltan.map(k => '<div class="it"><b>' + esc(k === CUY_SIN_CTA ? 'Comprobantes sin cuenta contable (cargala en la solapa Comprobantes)' : k) + '</b>' + (k.includes('no está en el diccionario') || k.includes('auxiliares') ? '' : ' sin código') + ' · ' + s.falta[k].length + ' asiento(s)</div>').join('')
     + s.sinCot.map(x => '<div class="it"><b>Sin cotización</b> · ' + esc(x) + '</div>').join('') + '</div>',
     '<button class="btn ghost" id="ae-cot">Ir a cotizaciones</button><button class="btn ghost" id="ae-plan">Ir al plan de cuentas</button><button class="btn ghost" id="ae-igual">Exportar igual</button>', 'wide');
   document.getElementById('ae-plan').addEventListener('click', () => { cerrarModal(); CUY.tab = 'plan'; cuyRender(); });
@@ -2016,7 +2063,7 @@ function cuyRenderAsientos(){
   const fac = CUY.asTab === 'fac', ns = fac ? 'afac' : 'amov', sel = CUY.sel[fac ? 'fac' : 'mov'];
   const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
   const asDe = x => fac ? cuyAsientoFac(x) : cuyAsientoMov(x);
-  const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave);
+  const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave === CUY_SIN_CTA ? 'falta cuenta contable (Comprobantes)' : l.clave);
   const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num', td:x => { const a = asDe(x);
     if (a.falta.length) return '<span class="warn" title="Cargala en Cotizaciones">⚠ falta ' + esc([...new Set(a.falta)].join(', ')) + '</span>';
     const l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
@@ -2299,7 +2346,7 @@ function cuyPlanClaves(){
   add('DIF_CAMBIO_POS','Fijas','Diferencia de cambio positiva (ganancia)', 0, true); add('DIF_CAMBIO_NEG','Fijas','Diferencia de cambio negativa (pérdida)', 0, true);
   add('CLASIF:GASTOS BANCARIOS','Gasto / contrapartida','Gastos bancarios (comisiones)', 0, true);
   CUY_CTAS.forEach(c => add('CUENTA:' + c.n, 'Banco / caja', c.n + ' (' + c.mon + ')', CUY.movs.filter(m => m.cuenta === c.n).length));
-  CUY.lista.forEach(r => { if (!String(r.cuenta_gasto || '').trim()) add(cuyClaveRubro(r.rubro), 'Gasto por rubro (facturas)', r.rubro || '(sin rubro)', 1, true); });
+  CUY.lista.forEach(r => add(cuyClaveRubro(r.rubro), 'Rubro → aux. 02 EERR', r.rubro || '(sin rubro)', 1, true));
   CUY.movs.filter(m => m.tipo !== 'saldo_inicial').forEach(m => { const c = cuyContraMov(m); if (c !== 'PROVEEDORES' && c !== 'CAMBIO' && !c.startsWith('COD:')) add(c, 'Gasto / contrapartida', c.slice(7), 1, true); });
   Object.keys(CUY.plan).forEach(c => { if (!k.has(c) && !c.startsWith('CONFIG:')) add(c, 'Otras (guardadas)', c); });
   return [...k.values()];
@@ -2308,9 +2355,13 @@ function cuyRenderPlan(){
   document.getElementById('topActions').innerHTML = '';
   const filas = cuyPlanClaves(), ns = 'plan';
   const lista = { codigo:'dl-dic-cta', aux_eerr:'dl-dic-eerr' };
-  const inp = (x, campo, ph) => SP.editar ? '<input class="tc-in" style="width:' + (campo === 'nombre' ? 220 : 110) + 'px;text-align:left" data-plan="' + esc(x.clave) + '" data-campo="' + campo + '" value="' + esc(cuyPlan(x.clave)[campo] || '') + '" placeholder="' + esc(ph || '') + '"'
+  const esRubro = x => x.clave.startsWith('RUBRO:');
+  const cuyPlanOk = x => esRubro(x) ? !!(cuyPlan(x.clave).aux_eerr || cuyAuxEerr(x.desc)) : !!cuyPlan(x.clave).codigo;
+  const inp = (x, campo, ph) => (esRubro(x) && campo !== 'aux_eerr') ? '<span class="muted">' + (campo === 'codigo' ? 'en cada comprobante' : '—') + '</span>' : SP.editar ? '<input class="tc-in" style="width:' + (campo === 'nombre' ? 220 : 110) + 'px;text-align:left" data-plan="' + esc(x.clave) + '" data-campo="' + campo + '" value="' + esc(cuyPlan(x.clave)[campo] || '') + '" placeholder="' + esc(ph || '') + '"'
       + (lista[campo] && !(campo === 'codigo' && x.clave.startsWith('MONEDA:')) ? ' list="' + lista[campo] + '"' : '') + '>' : esc(cuyPlan(x.clave)[campo] || '—');
-  const enDic = x => { const p = cuyPlan(x.clave); if (x.clave.startsWith('MONEDA:') || !p.codigo || !CUY.dic.cuentas.length) return '<span class="muted">—</span>';
+  const enDic = x => { const p = cuyPlan(x.clave);
+    if (x.clave.startsWith('RUBRO:')) { const e = cuyDicEerr(p.aux_eerr || cuyAuxEerr(x.desc)); return e ? '<span style="color:#4f8a53">✓ EERR ' + esc(e.cod + ' · ' + e.desc) + '</span>' : '<span class="warn">elegí el aux. 02 EERR</span>'; }
+    if (x.clave.startsWith('MONEDA:') || !p.codigo || !CUY.dic.cuentas.length) return '<span class="muted">—</span>';
     const c = cuyDicCta(p.codigo), e = p.aux_eerr ? cuyDicEerr(p.aux_eerr) : null;
     return (c ? '<span style="color:#4f8a53">✓ ' + esc(c.desc) + '</span>' + (String(c.habil || '').toLowerCase() === 'no' ? ' <span class="warn">(no habilitada)</span>' : '') : '<span class="warn">⚠ no está en el diccionario</span>')
       + (p.aux_eerr ? '<div class="muted">EERR: ' + (e ? esc(e.desc) : '<span class="warn">⚠ ' + esc(p.aux_eerr) + ' no existe</span>') + '</div>' : ''); };
@@ -2318,23 +2369,24 @@ function cuyRenderPlan(){
     { id:'grupo', t:'Grupo', v:x => x.grupo, td:x => esc(x.grupo) },
     { id:'clave', t:'Concepto', s:x => x.clave, td:x => '<strong>' + esc(x.desc) + '</strong><div class="muted">' + esc(x.clave) + '</div>' },
     { id:'uso', t:'Usos', s:x => x.uso, cls:'num', td:x => x.uso || '<span class="muted">—</span>' },
-    { id:'est', t:'Estado', v:x => cuyPlan(x.clave).codigo ? 'Con código' : 'Sin código', td:x => cuyPlan(x.clave).codigo ? '<span class="badge b-verde">ok</span>' : '<span class="badge b-ambar">sin código</span>' },
+    { id:'est', t:'Estado', v:x => cuyPlanOk(x) ? 'Ok' : 'Falta', td:x => cuyPlanOk(x) ? '<span class="badge b-verde">ok</span>' : '<span class="badge b-ambar">' + (esRubro(x) ? 'sin aux. EERR' : 'sin código') + '</span>' },
     { id:'cod', t:'Código Tango', td:x => inp(x, 'codigo', x.clave.startsWith('MONEDA:') ? 'código moneda' : 'código cuenta') },
     { id:'nom', t:'Nombre de la cuenta', td:x => inp(x, 'nombre', '') },
-    { id:'eerr', t:'Aux. 02 EERR', td:x => x.eerr ? inp(x, 'aux_eerr', 'código') : '<span class="muted">—</span>' },
+    { id:'eerr', t:'Aux. 02 EERR', td:x => !x.eerr ? '<span class="muted">—</span>' : inp(x, 'aux_eerr', esRubro(x) && cuyAuxEerr(x.desc) ? cuyAuxEerr(x.desc) + ' (diccionario)' : 'código')
+        + (esRubro(x) && cuyAuxEerr(x.desc) ? '<div class="muted">' + esc((cuyDicEerr(cuyAuxEerr(x.desc)) || {}).desc || '') + '</div>' : '') },
     { id:'dic', t:'Diccionario', td:enDic },
   ];
   const dls = '<datalist id="dl-dic-cta">' + CUY.dic.cuentas.filter(c => String(c.habil || '').toLowerCase() !== 'no').map(c => '<option value="' + esc(c.cod) + '">' + esc(c.cod + ' - ' + c.desc) + '</option>').join('') + '</datalist>'
     + '<datalist id="dl-dic-eerr">' + CUY.dic.eerr.map(c => '<option value="' + esc(c.cod) + '">' + esc(c.cod + ' - ' + c.desc) + '</option>').join('') + '</datalist>';
   TABLAS[ns] = { cols, base: () => filas };
   const f = tablaFiltrar(ns, cols, filas, x => x.clave + ' ' + x.desc + ' ' + (cuyPlan(x.clave).codigo || '') + ' ' + (cuyPlan(x.clave).nombre || ''));
-  const sin = filas.filter(x => !cuyPlan(x.clave).codigo).length;
+  const sin = filas.filter(x => !cuyPlanOk(x)).length;
   $main.innerHTML = cuyTabs()
-    + '<div class="meta-bar">Con estos códigos se arman los asientos. Los conceptos salen solos de lo cargado (rubros de las facturas, clasificaciones de los movimientos). <b>' + sin + ' sin código.</b> '
+    + '<div class="meta-bar">Cuentas fijas y de los movimientos de banco / caja (Proveedores, bancos, cajas, gastos bancarios, diferencia de cambio, transferencias). La cuenta de cada <b>factura</b> se define en la solapa <b>Comprobantes</b>; acá los rubros solo llevan su aux. 02 EERR. <b>' + sin + ' pendientes.</b> '
     + 'Es el mismo plan de cuentas Tango que Argentina: en Código escribí el número o parte del nombre y elegí del diccionario de Compras'
     + (CUY.dicErr ? ' — <span class="warn">no pude leer el diccionario (' + esc(CUY.dicErr) + '): se puede cargar igual a mano, sin buscador ni validación</span>' : ' (' + CUY.dic.cuentas.length + ' cuentas)') + '.</div>' + dls
     + '<div class="card">' + cardH('Plan de cuentas UY', 'Se guarda al salir de cada casilla (o con Enter). En amarillo: sin código.')
-    + tablaHerramientas(ns, 'Buscar concepto o código…') + tablaHtml(ns, cols, f, '', x => cuyPlan(x.clave).codigo ? '' : 'revisar') + '</div>';
+    + tablaHerramientas(ns, 'Buscar concepto o código…') + tablaHtml(ns, cols, f, '', x => cuyPlanOk(x) ? '' : 'revisar') + '</div>';
   tablaEventos(); cuyTabsEventos();
   $main.querySelectorAll('[data-plan]').forEach(i => {
     i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
