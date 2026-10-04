@@ -924,7 +924,10 @@ const cuyNum = v => (v == null || v === '') ? null : +v;
 const cuyEsUSD = r => r.origen_moneda === 'USD';
 const cuyTcPend = r => cuyEsUSD(r) && cuyNum(r.tc) == null;
 // Pesos derivados (§4 del spec): UYU directo; USD × TC; sin TC → null (no suma)
+// Neto = total − IVA (igual que el asiento): sin IVA (ej. aportes BPS) el neto es el total, aunque se haya cargado 0
+function cuyNetoOrig(r){ const suf = cuyEsUSD(r) ? '_usd' : '_uyu', t = cuyNum(r['total' + suf]); return t == null ? cuyNum(r['neto' + suf]) : Math.round((t - (cuyNum(r['iva' + suf]) || 0)) * 100) / 100; }
 function cuyPesos(r, k){
+  if (k === 'neto') { const n = cuyNetoOrig(r); if (!cuyEsUSD(r)) return n; const tc = cuyNum(r.tc); return (tc == null || n == null) ? null : Math.round(n * tc * 100) / 100; }
   if (!cuyEsUSD(r)) return cuyNum(r[k + '_uyu']);
   const tc = cuyNum(r.tc), u = cuyNum(r[k + '_usd']);
   return (tc == null || u == null) ? null : Math.round(u * tc * 100) / 100;
@@ -1225,7 +1228,7 @@ function cuyExportar(){
   const datos = filas.map(r => ({
     'Fecha': r.fecha || '', 'Período': r.periodo || '', 'Proveedor': r.proveedor || '', 'Código': r.proveedor_cod || '', 'RUT emisor': r.rut_emisor || '',
     'Tipo CFE': r.tipo_cfe || '', 'Serie / N°': r.serie_numero || '', 'Concepto': r.concepto || '', 'Rubro': r.rubro || '', 'Proyecto': r.proyecto || '',
-    'Moneda': r.origen_moneda || '', 'Neto USD': cuyNum(r.neto_usd), 'IVA USD': cuyNum(r.iva_usd), 'Total USD': cuyNum(r.total_usd), 'TC': cuyNum(r.tc),
+    'Moneda': r.origen_moneda || '', 'Neto USD': cuyEsUSD(r) ? cuyNetoOrig(r) : null, 'IVA USD': cuyNum(r.iva_usd), 'Total USD': cuyNum(r.total_usd), 'TC': cuyNum(r.tc),
     'Neto $U': cuyPesos(r,'neto'), 'IVA $U': cuyPesos(r,'iva'), 'Total $U': cuyPesos(r,'total'),
     'Estado de pago': r.estado_pago || '', 'Cuenta': r.cuenta || '', 'Fecha de pago': r.fecha_pago || '', 'Anulada': r.anulada ? 'Sí' : 'No',
     'Doc. relacionado': r.doc_relacionado || '', 'Observaciones': r.observaciones || '', 'TC pendiente': cuyTcPend(r) ? 'Sí' : '',
