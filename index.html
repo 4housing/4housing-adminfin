@@ -1230,7 +1230,7 @@ const r2 = v => Math.round((+v || 0) * 100) / 100;
 function fmtMon(v, mon){ return v == null ? '—' : (mon === 'USD' ? 'US$ ' : mon === 'ARS' ? 'AR$ ' : '$U ') + fmtNum(v); }
 // Valores por defecto del plan (los pisa lo cargado en adminfin_cuy_plan). Cuentas del Santander UY: dato de Micaela.
 // Cuentas: dato de Micaela (oct 2026). CAJA PESOS UY 11110082 es una cuenta a crear en Tango.
-// Diferencia de cambio: 42000002 / 58000002 del diccionario. 58000002 → aux. 02 EERR 21 J) OTROS EGRESOS (confirmado por Micaela).
+// Diferencia de cambio: 42000002 / 58000002 del diccionario. 58000002 → aux. 02 EERR 21 J) OTROS EGRESOS y 42000002 → 11 J) OTROS INGRESOS (confirmado por Micaela).
 // Moneda PES / DOL: los mismos códigos que usa el asiento de Tesorería.
 const CUY_PLAN_DEF = {
   'CUENTA:Santander USD':   { codigo:'11120025', nombre:'Santander UY USD' },
@@ -1240,7 +1240,7 @@ const CUY_PLAN_DEF = {
   'PROVEEDORES':            { codigo:'21100001', nombre:'Proveedores' },
   'IVA_COMPRAS':            { codigo:'11510001', nombre:'IVA Credito Fiscal' },
   'CLASIF:GASTOS BANCARIOS':{ codigo:'55000005', nombre:'Gastos Bancarios' },
-  'DIF_CAMBIO_POS':         { codigo:'42000002', nombre:'Diferencia de c° positiva' },
+  'DIF_CAMBIO_POS':         { codigo:'42000002', nombre:'Diferencia de c° positiva', aux_eerr:'11' },   // aux. 02 = J) OTROS INGRESOS (Micaela, oct 2026); solo aux. 02
   'DIF_CAMBIO_NEG':         { codigo:'58000002', nombre:'Diferencia de c° negativa', aux_eerr:'21' },   // aux. 02 = J) OTROS EGRESOS (Micaela, oct 2026); solo aux. 02
   'MONEDA:ARS':             { codigo:'PES' },
   'MONEDA:USD':             { codigo:'DOL' },
