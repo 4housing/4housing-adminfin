@@ -1230,7 +1230,7 @@ const r2 = v => Math.round((+v || 0) * 100) / 100;
 function fmtMon(v, mon){ return v == null ? '—' : (mon === 'USD' ? 'US$ ' : mon === 'ARS' ? 'AR$ ' : '$U ') + fmtNum(v); }
 // Valores por defecto del plan (los pisa lo cargado en adminfin_cuy_plan). Cuentas del Santander UY: dato de Micaela.
 // Cuentas: dato de Micaela (oct 2026). CAJA PESOS UY 11110082 es una cuenta a crear en Tango.
-// Diferencia de cambio: las del diccionario (42000002 / 58000002), propuestas por Claude: confirmar.
+// Diferencia de cambio: 42000002 / 58000002 del diccionario. 58000002 → aux. 02 EERR 21 J) OTROS EGRESOS y 42000002 → 11 J) OTROS INGRESOS (confirmado por Micaela).
 // Moneda PES / DOL: los mismos códigos que usa el asiento de Tesorería.
 const CUY_PLAN_DEF = {
   'CUENTA:Santander USD':   { codigo:'11120025', nombre:'Santander UY USD' },
@@ -1240,8 +1240,8 @@ const CUY_PLAN_DEF = {
   'PROVEEDORES':            { codigo:'21100001', nombre:'Proveedores' },
   'IVA_COMPRAS':            { codigo:'11510001', nombre:'IVA Credito Fiscal' },
   'CLASIF:GASTOS BANCARIOS':{ codigo:'55000005', nombre:'Gastos Bancarios' },
-  'DIF_CAMBIO_POS':         { codigo:'42000002', nombre:'Diferencia de c° positiva' },
-  'DIF_CAMBIO_NEG':         { codigo:'58000002', nombre:'Diferencia de c° negativa' },
+  'DIF_CAMBIO_POS':         { codigo:'42000002', nombre:'Diferencia de c° positiva', aux_eerr:'11' },   // aux. 02 = J) OTROS INGRESOS (Micaela, oct 2026); solo aux. 02
+  'DIF_CAMBIO_NEG':         { codigo:'58000002', nombre:'Diferencia de c° negativa', aux_eerr:'21' },   // aux. 02 = J) OTROS EGRESOS (Micaela, oct 2026); solo aux. 02
   'MONEDA:ARS':             { codigo:'PES' },
   'MONEDA:USD':             { codigo:'DOL' },
   'CONFIG:COT_DIA':         { codigo:'anterior' },
@@ -1259,8 +1259,8 @@ function cuyPlan(k){
    Si no se puede leer, el plan se carga igual a mano (sin buscador ni validación). */
 async function cuyCargarDic(){
   try {
-    const [cu, op] = await Promise.all([selTodo('compras_cuentas_contables', 'cod, descripcion, habil', null), selTodo('compras_aux_opciones', 'tipo_cod, cod, descripcion, habil', null)]);
-    CUY.dic = { cuentas: cu.map(c => ({ cod:String(c.cod).trim(), desc:c.descripcion || '', habil:c.habil })).sort((a,b) => a.cod.localeCompare(b.cod)),
+    const [cu, op] = await Promise.all([selTodo('compras_cuentas_contables', 'cod, descripcion, habil, usa_aux', null), selTodo('compras_aux_opciones', 'tipo_cod, cod, descripcion, habil', null)]);
+    CUY.dic = { cuentas: cu.map(c => ({ cod:String(c.cod).trim(), desc:c.descripcion || '', habil:c.habil, usa_aux:c.usa_aux })).sort((a,b) => a.cod.localeCompare(b.cod)),
                 eerr: op.filter(o => String(o.tipo_cod) === '2').map(o => ({ cod:String(o.cod).trim(), desc:o.descripcion || '', habil:o.habil })) };
     CUY.dicErr = CUY.dic.cuentas.length ? '' : 'el diccionario volvió vacío (¿falta correr sql/2026-10_contabilidad_uy_diccionario.sql?)';
   } catch (e) { CUY.dic = { cuentas:[], eerr:[] }; CUY.dicErr = e.message || String(e); }
@@ -1946,7 +1946,7 @@ function cuyAsientoMov(m){
     Object.entries(porCta).forEach(([k2, suma]) => lineas.push({ clave: k2, monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley }));
   } else {
     const res = k !== 'PROVEEDORES';
-    lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, proy: res ? cuyProyCod(m.auxiliar) : '' });
+    lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, auxEerr: res && m.rubro ? cuyAuxEerr(m.rubro) : '', proy: res ? cuyProyCod(m.auxiliar) : '' });
   }
   lineas.push({ clave: 'CUENTA:' + m.cuenta, monto: imp, leyenda: ley });
   // Lo que no cierra es diferencia de cambio (distinta cotización entre factura y pago, o entre las dos patas del cambio)
@@ -1975,9 +1975,14 @@ function cuyAsientoHojas(asientos){
       const imp = r2(Math.abs(l.monto));
       ren.push([a.id, nro, cod, l.monto > 0 ? imp : '', l.monto < 0 ? imp : '', fecha, l.leyenda || '', '', '', 'No', '']);
       // Aux 02 EERR: solo si la cuenta lo tiene cargado en el plan (las cuentas patrimoniales no llevan)
+      // Auxiliares solo en cuentas que los usan (diccionario: usa_aux). Proveedores, IVA, bancos y cajas no llevan.
+      const dc = cod ? cuyDicCta(cod) : null, usaAux = dc ? String(dc.usa_aux || '').toLowerCase() === 'si' : null;
       const auxE = l.auxEerr || p.aux_eerr;
-      if (l.eerr !== undefined && auxE) aux.push([a.id, nro, '02', 'EERR', auxE, l.eerr || p.nombre || '', 100, imp, l.leyenda || '']);
-      if (l.proy) aux.push([a.id, nro, '03', 'INSTRUCTIVO DE FABRICACION', l.proy, '', 100, imp, l.leyenda || '']);
+      if (usaAux !== false) {
+        if (l.eerr !== undefined && auxE) aux.push([a.id, nro, '02', 'EERR', auxE, (cuyDicEerr(auxE) || {}).desc || l.eerr || p.nombre || '', 100, imp, l.leyenda || '']);
+        else if (usaAux === true) noti(l.clave + ' (la cuenta ' + cod + ' usa auxiliares: falta el 02 EERR)', a);
+        if (l.proy) aux.push([a.id, nro, '03', 'INSTRUCTIVO DE FABRICACION', l.proy, '', 100, imp, l.leyenda || '']);
+      }
     });
     if (a.mon === 'USD' && a.cot) cot.push([a.id, monCod, 'COTIZACIÓN', a.cot.v, 'No', '']);   // DOL: cotización ARS/USD (BNA divisa)
   });
@@ -1999,7 +2004,7 @@ function cuyAsientoExportar(asientos, nombre){
   if (!faltan.length && !s.sinCot.length) { cuyAsientoBajar(asientos, nombre); return; }
   abrirModal('Faltan datos para el asiento',
     '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52;line-height:1.5">Así como está, Tango lo va a rechazar o va a quedar incompleto. Completá el <b>Plan de cuentas</b> y las <b>Cotizaciones</b> y volvé a exportar.</p><div class="hist" style="max-height:300px">'
-    + faltan.map(k => '<div class="it"><b>' + esc(k) + '</b>' + (k.includes('no está en el diccionario') ? '' : ' sin código') + ' · ' + s.falta[k].length + ' asiento(s)</div>').join('')
+    + faltan.map(k => '<div class="it"><b>' + esc(k) + '</b>' + (k.includes('no está en el diccionario') || k.includes('auxiliares') ? '' : ' sin código') + ' · ' + s.falta[k].length + ' asiento(s)</div>').join('')
     + s.sinCot.map(x => '<div class="it"><b>Sin cotización</b> · ' + esc(x) + '</div>').join('') + '</div>',
     '<button class="btn ghost" id="ae-cot">Ir a cotizaciones</button><button class="btn ghost" id="ae-plan">Ir al plan de cuentas</button><button class="btn ghost" id="ae-igual">Exportar igual</button>', 'wide');
   document.getElementById('ae-plan').addEventListener('click', () => { cerrarModal(); CUY.tab = 'plan'; cuyRender(); });
