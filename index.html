@@ -1827,8 +1827,10 @@ function cuyFechaXls(v){
   if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3], mo = +m[2], d = +m[1]; if (mo < 1 || mo > 12 || d < 1 || d > 31) return null; return y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0'); }
   m = t.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[0] : null;
 }
+// Coma decimal: "1.234,56" / "40,2360" (BCU, 4 decimales) / "1,000000". Una sola coma seguida de exactamente 3 cifras
+// ("1,234") se sigue leyendo como separador de miles.
 function cuyNumXls(v){ if (typeof v === 'number') return v; const t = String(v == null ? '' : v).trim().replace(/\s/g,''); if (!t) return null;
-  const x = +(/,\d{1,2}$/.test(t) ? t.replace(/\./g,'').replace(',','.') : t.replace(/,/g,'')); return isNaN(x) ? null : x; }
+  const x = +(/^[^,]*,(\d{1,2}|\d{4,})$/.test(t) ? t.replace(/\./g,'').replace(',','.') : t.replace(/,/g,'')); return isNaN(x) ? null : x; }
 function cuyTipoAuto(f){
   const cl = fold(f.clasificacion), co = fold(f.concepto), au = fold(f.auxiliar);
   if (au.includes('saldo inicio') || co.includes('saldo inicial')) return 'saldo_inicial';
@@ -2280,7 +2282,7 @@ function cuyRenderCot(){
   const faltan = filas.filter(x => x.usos && est(x) !== 'Con cotización').length;
   $main.innerHTML = cuyTabs()
     + '<div class="meta-bar">La conciliación es en la moneda de cada banco (UYU / USD). Las cotizaciones se usan para el asiento en Tango, todo en pesos argentinos (PES): USD × <b>ARS/USD</b>; UYU pasando por el dólar (UYU ÷ UYU/USD × ARS/USD). '
-    + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.gub.uy/direccion-general-impositiva/datos-y-estadisticas/datos/cotizaciones-interbancarias" target="_blank" rel="noopener">cotizaciones interbancarias de la DGI</a> y subilo con "Importar cotizaciones". '
+    + 'UYU/USD: bajá el Excel de <a class="lnk" href="https://www.bcu.gub.uy/Estadisticas-e-Indicadores/Paginas/Cotizaciones.aspx" target="_blank" rel="noopener">cotizaciones interbancarias del BCU</a> (moneda DLS. USA BILLETE, el mismo valor que publica la DGI, sin esperar a fin de mes) y subilo con "Importar cotizaciones". '
     + (cuyArsAuto() === 'billete'
         ? 'ARS/USD: sale solo del <b>USD Billete promedio</b> (compra/venta) que registra Compras desde dolarapi — la "Cotización Billete" de Tango' + (CUY.billErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.billErr) + ' (falta correr sql/2026-10_contabilidad_uy_usd_billete.sql)</span>' : (CUY.bill && CUY.bill.length ? ', hasta el ' + fmtFecha(CUY.bill[CUY.bill.length - 1].fecha) : '')) + '. '
         : 'ARS/USD: sale del índice USD Oficial del diccionario' + (CUY.oficErr ? ' — <span class="warn">no se pudo leer: ' + esc(CUY.oficErr) + '</span>' : '') + '. ')
@@ -2332,13 +2334,15 @@ function cuyRenderCot(){
 // Importa una serie diaria desde Excel / CSV (DGI interbancarias, BNA u otra): detecta la columna de fechas y deja
 // elegir la columna del valor y a qué cotización va. El formato del archivo de la DGI no se pudo ver desde el desarrollo:
 // por eso no se asume ninguna columna fija — se elige mirando los encabezados y la vista previa.
+// En un archivo con varias monedas (BCU), la que se propone importar: el dólar billete interbancario
+function cuyMonDef(h){ return h.mvals.find(v => /USA.*BILLETE/i.test(v)) || h.mvals.find(v => /D[OÓ]L|USD|U\.?S\.?A/i.test(v)) || h.mvals[0]; }
 function cuyCotImportar(){
   if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
   abrirModal('Importar cotizaciones',
-    '<p style="margin:0 0 10px;font-size:12.5px;color:#5f5c52;line-height:1.5">Subí el Excel o CSV con una fila por día (ej. el de cotizaciones interbancarias de la DGI). Elegí la columna con el valor y a qué cotización corresponde. Se guarda por fecha; no se pisan las cargadas a mano salvo que lo tildes.</p>'
+    '<p style="margin:0 0 10px;font-size:12.5px;color:#5f5c52;line-height:1.5">Subí el Excel o CSV con una fila por día (ej. el de cotizaciones interbancarias del BCU o de la DGI). Elegí la columna con el valor y a qué cotización corresponde. Se guarda por fecha; no se pisan las cargadas a mano salvo que lo tildes.</p>'
     + '<div class="field"><label>Archivo</label><input type="file" id="ci-file" accept=".xlsx,.xls,.csv,.ods"></div><div id="ci-cfg"></div><div class="err" id="ci-err"></div>',
     '<button class="btn ghost" id="ci-no">Cancelar</button><button class="btn" id="ci-ok" disabled>Importar</button>', 'wide');
-  let hojas = [], nombre = '';
+  let hojas = [], nombre = '', leerSel = null;
   const $ = i => document.getElementById(i);
   $('ci-no').addEventListener('click', cerrarModal);
   const leer = (ws) => {
@@ -2353,7 +2357,14 @@ function cuyCotImportar(){
       const nums = datos.filter(r => { const v = cuyNumXls(r[c]); return v != null && v > 0; }).length; if (nums < datos.length * 0.5) continue;
       let tit = ''; for (let k = i0 - 1; k >= 0 && k >= i0 - 6; k--) { const t = rows[k] && rows[k][c]; if (t != null && String(t).trim() && cuyNumXls(t) == null) { tit = String(t).trim() + (tit ? ' · ' + tit : ''); } }
       cols.push({ c, tit: tit || 'Columna ' + XLSX.utils.encode_col(c), ej: cuyNumXls(datos[datos.length - 1][c]) }); }
-    return { fc, datos, cols };
+    // Archivos con varias monedas en la misma hoja (ej. BCU: DLS. USA BILLETE, PESO ARG.BILLETE, REAL BILLETE):
+    // columna de texto con pocos valores distintos → se elige cuál importar (si no, la última moneda pisa a las demás)
+    let mc = -1, mvals = [];
+    for (let c = 0; c < ncol && mc < 0; c++) { if (c === fc) continue;
+      const vs = datos.map(r => r[c]).filter(v => typeof v === 'string' && v.trim() && cuyNumXls(v) == null).map(v => v.trim());
+      const u = [...new Set(vs)]; if (vs.length >= datos.length * 0.8 && u.length >= 2 && u.length <= 30) { mc = c; mvals = u; } }
+    if (mc >= 0) { const md = cuyMonDef({ mvals }), ref = datos.filter(r => String(r[mc]).trim() === md); if (ref.length) cols.forEach(x => { x.ej = cuyNumXls(ref[ref.length - 1][x.c]); }); }
+    return { fc, datos, cols, mc, mvals };
   };
   $('ci-file').addEventListener('change', async e => {
     const f = e.target.files[0]; $('ci-err').textContent = ''; hojas = []; $('ci-ok').disabled = true; if (!f) return; nombre = f.name;
@@ -2361,32 +2372,41 @@ function cuyCotImportar(){
       const wb = XLSX.read(await f.arrayBuffer(), { type:'array' });
       wb.SheetNames.forEach(n => { const h = leer(wb.Sheets[n]); if (h && h.cols.length) hojas.push(Object.assign({ n }, h)); });
       if (!hojas.length) { $('ci-err').textContent = 'No encontré una columna de fechas con valores numéricos al lado.'; return; }
+      const selMon = h => h.mc < 0 ? '' : h.mvals.map(v => '<option' + (v === cuyMonDef(h) ? ' selected' : '') + '>' + esc(v) + '</option>').join('');
+      const pintaMon = h => { $('ci-monf').style.display = h.mc < 0 ? 'none' : ''; $('ci-mon').innerHTML = selMon(h); };
+      const fteDef = () => $('ci-dest').value === 'ars_usd' ? 'BNA divisa' : (/dgi|interbanc/i.test(nombre) ? 'DGI interbancario' : (cuyHojaSel().mc >= 0 ? 'BCU interbancario · ' + $('ci-mon').value : nombre));
       const pinta = () => {
-        const h = hojas[+$('ci-hoja').value || 0], col = h.cols.find(x => x.c === +$('ci-col').value) || h.cols[0];
-        const prev = h.datos.slice(-6).map(r => '<tr><td>' + fmtFecha(cuyFechaXls(r[h.fc])) + '</td><td class="num">' + esc(cuyNumXls(r[col.c]) == null ? '—' : fmtTC(cuyNumXls(r[col.c]))) + '</td></tr>').join('');
-        const fs = h.datos.map(r => cuyFechaXls(r[h.fc])).sort();
-        $('ci-prev').innerHTML = h.datos.length + ' filas · ' + fmtFecha(fs[0]) + ' a ' + fmtFecha(fs[fs.length - 1]) + '<table class="grid" style="margin-top:6px"><thead><tr><th>Fecha</th><th>Valor</th></tr></thead><tbody>' + prev + '</tbody></table>';
+        const h = cuyHojaSel(), col = h.cols.find(x => x.c === +$('ci-col').value) || h.cols[0], datos = cuyFilasSel(h);
+        if (!$('ci-fte').dataset.tocado) $('ci-fte').value = fteDef();
+        const prev = datos.slice(-6).map(r => '<tr><td>' + fmtFecha(cuyFechaXls(r[h.fc])) + '</td><td class="num">' + esc(cuyNumXls(r[col.c]) == null ? '—' : fmtTC(cuyNumXls(r[col.c]))) + '</td></tr>').join('');
+        const fs = datos.map(r => cuyFechaXls(r[h.fc])).sort();
+        $('ci-prev').innerHTML = datos.length + ' filas · ' + fmtFecha(fs[0]) + ' a ' + fmtFecha(fs[fs.length - 1]) + '<table class="grid" style="margin-top:6px"><thead><tr><th>Fecha</th><th>Valor</th></tr></thead><tbody>' + prev + '</tbody></table>';
       };
       const selCols = h => h.cols.map(x => '<option value="' + x.c + '">' + esc(x.tit) + ' (ej. ' + esc(x.ej == null ? '—' : fmtTC(x.ej)) + ')</option>').join('');
       $('ci-cfg').innerHTML = '<div class="frow c2">'
         + '<div class="field"><label>Hoja</label><select id="ci-hoja">' + hojas.map((h, i) => '<option value="' + i + '">' + esc(h.n) + '</option>').join('') + '</select></div>'
         + '<div class="field"><label>Columna del valor</label><select id="ci-col">' + selCols(hojas[0]) + '</select></div></div>'
+        + '<div class="field" id="ci-monf" style="margin-top:10px"><label>Moneda (el archivo trae varias: se importa solo esta)</label><select id="ci-mon"></select></div>'
         + '<div class="frow c3" style="margin-top:10px"><div class="field"><label>Es la cotización</label><select id="ci-dest"><option value="uyu_usd">UYU por USD</option><option value="ars_usd">ARS por USD</option></select></div>'
         + '<div class="field"><label>Fuente (queda anotada)</label><input id="ci-fte" value="' + esc(/dgi|interbanc/i.test(nombre) ? 'DGI interbancario' : nombre) + '"></div>'
         + '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--ink)"><input type="checkbox" id="ci-pisar" style="width:auto"> Pisar las cargadas a mano</label></div></div>'
         + '<div class="box" id="ci-prev"></div>'
         + '<div class="muted" style="margin-top:8px">Revisá en la vista previa que la columna sea la que querés (comprador / vendedor, billete / fondo). Las fechas son las del archivo; el criterio "día hábil anterior" se aplica después, al usar la cotización.</div>';
-      $('ci-hoja').addEventListener('change', () => { $('ci-col').innerHTML = selCols(hojas[+$('ci-hoja').value]); pinta(); });
+      const cuyHojaSel = () => hojas[+$('ci-hoja').value || 0];
+      const cuyFilasSel = h => h.mc < 0 ? h.datos : h.datos.filter(r => String(r[h.mc] == null ? '' : r[h.mc]).trim() === $('ci-mon').value);
+      leerSel = () => ({ h: cuyHojaSel(), datos: cuyFilasSel(cuyHojaSel()) });
+      $('ci-hoja').addEventListener('change', () => { const h = cuyHojaSel(); $('ci-col').innerHTML = selCols(h); pintaMon(h); pinta(); });
       $('ci-col').addEventListener('change', pinta);
-      $('ci-dest').addEventListener('change', () => { if (!$('ci-fte').dataset.tocado) $('ci-fte').value = $('ci-dest').value === 'ars_usd' ? 'BNA divisa' : (/dgi|interbanc/i.test(nombre) ? 'DGI interbancario' : nombre); });
+      $('ci-mon').addEventListener('change', pinta);
+      $('ci-dest').addEventListener('change', pinta);
       $('ci-fte').addEventListener('input', () => { $('ci-fte').dataset.tocado = '1'; });
-      pinta(); $('ci-ok').disabled = false;
+      pintaMon(hojas[0]); pinta(); $('ci-ok').disabled = false;
     } catch (ex) { $('ci-err').textContent = 'No pude leer el archivo: ' + (ex.message || ex); }
   });
   $('ci-ok').addEventListener('click', async () => {
-    const h = hojas[+$('ci-hoja').value || 0], c = +$('ci-col').value, campo = $('ci-dest').value, fcampo = campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu';
+    const { h, datos } = leerSel(), c = +$('ci-col').value, campo = $('ci-dest').value, fcampo = campo === 'ars_usd' ? 'fuente_ars' : 'fuente_uyu';
     const fte = $('ci-fte').value.trim() || 'archivo', pisar = $('ci-pisar').checked;
-    const por = {}; h.datos.forEach(r => { const f = cuyFechaXls(r[h.fc]), v = cuyNumXls(r[c]); if (f && v > 0) por[f] = v; });
+    const por = {}; datos.forEach(r => { const f = cuyFechaXls(r[h.fc]), v = cuyNumXls(r[c]); if (f && v > 0) por[f] = v; });
     let manual = 0; const filas = Object.entries(por).filter(([f]) => { const x = CUY.cots.find(k => k.fecha === f); if (x && x[fcampo] === 'manual' && cuyNum(x[campo]) != null && !pisar) { manual++; return false; } return true; })
       .map(([fecha, v]) => ({ fecha, [campo]: v, [fcampo]: fte }));
     if (!filas.length) { $('ci-err').textContent = 'No hay nada para importar' + (manual ? ' (' + manual + ' fechas ya cargadas a mano)' : '') + '.'; return; }
