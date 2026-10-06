@@ -1742,7 +1742,7 @@ function cuyMovForm(id, preset){
     + '<div class="frow c2">' + inp('mf-contra','Contrapartida (cuenta Tango) — opcional', c.contrapartida, ' list="dl-mf-cta" placeholder="vacío = la del Plan de cuentas por clasificación"')
     +   '<div class="field"><label>&nbsp;</label><div class="muted" style="font-size:11.5px;padding-top:6px" id="mf-contra-n">Para transferencias / ingresos cuya contrapartida depende del caso (aporte, préstamo, otra cuenta propia). No aplica a facturas vinculadas (van a Proveedores) ni a cambios de moneda emparejados (van contra la otra cuenta).</div></div></div>'
     + '<datalist id="dl-mf-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>'
-    + '<div class="frow">' + inp('mf-com','Comentarios', c.comentarios) + '</div>'
+    + '<div class="frow c2">' + inp('mf-com','Comentarios', c.comentarios) + inp('mf-asn','N° asiento Tango (si ya está registrado)', c.asiento_num, ' placeholder="vacío = pendiente de exportar"') + '</div>'
     + dl('dl-mclas', ['GASTOS BANCARIOS','ENTRE BANCOS','HONORARIOS','RETIRO BANCO','SMALL BALANCE'].concat(CUY.movs.map(x => x.clasificacion)))
     + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', CUY.movs.map(x => x.auxiliar)) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.map(x => x.proveedor)))
     + '<div class="err" id="mf-err"></div>',
@@ -1757,7 +1757,8 @@ function cuyMovForm(id, preset){
     const tc = n('mf-tc'); if (tc != null && !(tc > 0)) { err.textContent = 'El TC tiene que ser mayor a 0.'; return; }
     const fila = { cuenta: $('mf-cta').value, fecha: v('mf-fecha'), tipo: $('mf-tipo').value, importe: n('mf-imp'), tc, periodo: per ? +per : null,
       concepto: v('mf-conc') || null, clasificacion: v('mf-clas') || null, rubro: v('mf-rubro') || null, auxiliar: v('mf-aux') || null,
-      proveedor: v('mf-prov') || null, proveedor_cod: v('mf-cod') || null, fac: v('mf-fac') || null, comentarios: v('mf-com') || null };
+      proveedor: v('mf-prov') || null, proveedor_cod: v('mf-cod') || null, fac: v('mf-fac') || null, comentarios: v('mf-com') || null,
+      asiento_num: v('mf-asn') || null };   // solo este movimiento (en Asientos, el N° se copia a los demás del mismo día)
     if (!m0) fila.origen = 'manual';
     // contrapartida: solo se manda si se usa (si falta correr sql/2026-10_contabilidad_uy_contrapartida.sql, el resto se guarda igual)
     if (v('mf-contra') || (m0 && m0.contrapartida)) {
@@ -1941,12 +1942,24 @@ const cuyClaveRubro = r => 'RUBRO:' + (String(r || '').trim().toUpperCase() || '
 const cuyClaveClasif = c => 'CLASIF:' + (String(c || '').trim().toUpperCase() || '(SIN CLASIFICACIÓN)');
 // Valor de una factura en la moneda del asiento (USD | ARS), con las cotizaciones de la fecha de la factura:
 // es el importe con el que quedó registrada la deuda con el proveedor.
-function cuyFacConv(r, v, ma){ const mon = cuyEsUSD(r) ? 'USD' : 'UYU';
-  if (ma === 'UYU' && mon === 'USD' && cuyNum(r.tc) != null) return r2((+v || 0) * +r.tc);   // contador UY: TC propio de la factura en USD
-  return cuyConv(+v || 0, mon, ma, r.fecha); }
+// Nota de crédito que anula una factura ("Doc. relacionado" = la serie de la factura, misma moneda): lo accesorio sigue a lo
+// principal — se registra con las cotizaciones (fecha y TC) de la factura que anula, así netean y no queda diferencia de cambio.
+const cuySerieNorm = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+function cuyNcOrigen(r){
+  if (!/cr[eé]dito/i.test(String(r.tipo_cfe || '')) || !String(r.doc_relacionado || '').trim()) return null;
+  const rel = cuySerieNorm(r.doc_relacionado), ks = ['rut_emisor', 'proveedor_cod', 'proveedor'];
+  const mismoProv = x => { const c = ks.filter(k => String(r[k] || '').trim() && String(x[k] || '').trim()); return !c.length || c.some(k => fold(r[k]) === fold(x[k])); };
+  return CUY.lista.find(x => x.id !== r.id && !/cr[eé]dito/i.test(String(x.tipo_cfe || '')) && cuyEsUSD(x) === cuyEsUSD(r)
+    && cuySerieNorm(x.serie_numero) === rel && mismoProv(x)) || null;
+}
+// Fecha y TC con que se convierte un comprobante: los propios, o los de la factura que anula (N/C)
+function cuyFacBase(r){ const o = cuyNcOrigen(r); return o ? { fecha: o.fecha, tc: cuyNum(o.tc) != null ? o.tc : r.tc, de: o } : { fecha: r.fecha, tc: r.tc, de: null }; }
+function cuyFacConv(r, v, ma){ const mon = cuyEsUSD(r) ? 'USD' : 'UYU', b = cuyFacBase(r);
+  if (ma === 'UYU' && mon === 'USD' && cuyNum(b.tc) != null) return r2((+v || 0) * +b.tc);   // contador UY: TC propio de la factura en USD
+  return cuyConv(+v || 0, mon, ma, b.fecha); }
 function cuyFacValor(r, ma){ return cuyFacConv(r, cuyNum(cuyEsUSD(r) ? r.total_usd : r.total_uyu) || 0, ma); }
 // TC (UYU por USD) con que el contador UY ve el asiento en dólares
-const cuyTcUY = (fecha, r) => (r && cuyEsUSD(r) && cuyNum(r.tc) != null) ? +r.tc : ((cuyCotDe(fecha, 'uyu_usd') || {}).v || null);
+const cuyTcUY = (fecha, r) => { const tc = r ? cuyFacBase(r).tc : null; return (r && cuyEsUSD(r) && cuyNum(tc) != null) ? +tc : ((cuyCotDe(fecha, 'uyu_usd') || {}).v || null); };
 // Cuenta del gasto: la del comprobante si la tiene; si no, la del Plan de cuentas según el rubro
 // La cuenta del gasto se define en el comprobante (solapa Comprobantes): no sale del rubro ni del plan.
 const CUY_SIN_CTA = 'FAC_SIN_CUENTA';
@@ -1974,15 +1987,15 @@ function cuyAsientoFac(r){
   const mon = cuyEsUSD(r) ? 'USD' : 'UYU', ma = cuyMonAs(mon);
   const tot = cuyFacValor(r, ma), iva = cuyFacConv(r, cuyNum(mon === 'USD' ? r.iva_usd : r.iva_uyu) || 0, ma);
   const neto = tot == null ? null : r2(tot - (iva || 0));   // el neto absorbe el redondeo: el asiento siempre cierra
-  const ley = cuyLey([r.proveedor_cod || r.proveedor, r.serie_numero, r.proyecto]), kR = cuyClaveGasto(r);
+  const b = cuyFacBase(r), ley = cuyLey([r.proveedor_cod || r.proveedor, r.serie_numero, r.proyecto, b.de ? 'cotiz. de ' + (b.de.serie_numero || '') : '']), kR = cuyClaveGasto(r);
   const lineas = [{ clave: kR, monto: neto, leyenda: ley, eerr: r.rubro, auxEerr: cuyAuxEerr(r.rubro), proy: cuyProyCod(r.proyecto) }];
   if (iva) lineas.push({ clave:'IVA_COMPRAS', monto: iva, leyenda: ley });
   lineas.push({ clave: cuyClaveContra(r), monto: tot == null ? null : -tot, leyenda: ley });
   if (CUY_UY && mon === 'USD') {   // contador UY: equivalente en dólares = los dólares de la factura
     const tU = cuyNum(r.total_usd) || 0, iU = cuyNum(r.iva_usd) || 0;
     lineas[0].usd = r2(tU - iU); if (iva) lineas[1].usd = r2(iU); lineas[lineas.length - 1].usd = -r2(tU); }
-  return { id: r.id, fecha: r.fecha, mon: ma, cot: cuyCotDe(r.fecha, 'ars_usd'), tcUY: cuyTcUY(r.fecha, r),
-           falta: (CUY_UY && cuyEsUSD(r) && cuyNum(r.tc) != null) ? [] : cuyFaltaCot(r.fecha, mon),
+  return { id: r.id, fecha: r.fecha, mon: ma, cot: cuyCotDe(b.fecha, 'ars_usd'), tcUY: cuyTcUY(b.fecha, r),
+           falta: (CUY_UY && cuyEsUSD(r) && cuyNum(b.tc) != null) ? [] : cuyFaltaCot(b.fecha, mon),
            concepto: cuyLey([r.tipo_cfe, r.serie_numero, r.proveedor_cod || r.proveedor]), lineas };
 }
 // Contrapartida del asiento de un movimiento:
