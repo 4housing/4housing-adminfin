@@ -2050,6 +2050,14 @@ function cuyAsientoMov(m){
   }
   return { id: m.id, fecha: m.fecha, mon: ma, cot: cuyCotDe(m.fecha, 'ars_usd'), tcUY: cuyTcUY(m.fecha), falta, concepto: cuyLey([CUY_TIPOS_MOV[m.tipo], m.cuenta, m.concepto]), lineas };
 }
+// Fecha como número de serie de Excel (días desde 30/12/1899), sin hora ni zona horaria: con un Date de JS, SheetJS la
+// corría por el huso (en Montevideo / Buenos Aires el 01/08 quedaba 31/07 23:59). Formato dd/mm/aaaa al escribir el archivo.
+function cuyFechaSerie(f){ const m = String(f || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? (Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 864e5 : (f || ''); }
+function cuyHojaConFechas(aoa, cols){
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  for (let r = 1; r < aoa.length; r++) cols.forEach(c => { const a = XLSX.utils.encode_cell({ r, c }); if (ws[a] && ws[a].t === 'n') ws[a].z = 'dd/mm/yyyy'; });
+  return ws;
+}
 function cuyAsientoHojas(asientos){
   const cab = [['Identificador','Fecha de asiento','Clase de asiento','Código de tipo de asiento','Estado','Código de moneda','Concepto','Observaciones','Eliminar','ROW_VERSION']];
   const ren = [['Identificador','Nro.','Código de cuenta','Debe','Haber','Fecha de origen','Leyenda','Importe de la unidad adicional','Cantidad','Eliminar','ROW_VERSION']];
@@ -2057,7 +2065,7 @@ function cuyAsientoHojas(asientos){
   const aux = [['Identificador','Nro. renglón','Código tipo auxiliar','Tipo auxiliar','Código auxiliar','Descripción auxiliar','Porcentaje','Importe','Leyenda']];
   const falta = {}, sinCot = [], noti = (k, a) => { (falta[k] = falta[k] || []).push(a.id); };
   asientos.forEach(a => {
-    const fecha = /^\d{4}-\d{2}-\d{2}/.test(a.fecha || '') ? new Date(a.fecha + 'T00:00:00') : (a.fecha || '');
+    const fecha = cuyFechaSerie(a.fecha);
     const monCod = cuyPlan('MONEDA:' + a.mon).codigo || ''; if (!monCod) noti('MONEDA:' + a.mon, a);
     cab.push([a.id, fecha, CUY_AS_CLASE, CUY_AS_TIPO, CUY_AS_ESTADO, monCod, a.concepto, '', 'No', '']);
     let nro = 0;
@@ -2094,8 +2102,8 @@ function cuyAgruparPorDia(asientos, prefijo, titulo){
 }
 function cuyAsientoBajar(asientos, nombre){
   const s = cuyAsientoHojas(asientos), wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.cab), 'Asientos contables');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.ren), 'Renglones');
+  XLSX.utils.book_append_sheet(wb, cuyHojaConFechas(s.cab, [1]), 'Asientos contables');   // col. B: Fecha de asiento
+  XLSX.utils.book_append_sheet(wb, cuyHojaConFechas(s.ren, [5]), 'Renglones');            // col. F: Fecha de origen
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.cot), 'Cotizaciones');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.aux), 'Auxiliares');
   XLSX.writeFile(wb, nombre + '_' + hoyISO() + '.xlsx');
