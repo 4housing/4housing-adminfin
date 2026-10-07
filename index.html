@@ -2157,8 +2157,12 @@ function cuyExportarUY(){
     const lins = a.lineas.filter(l => l.monto == null || r2(l.monto)), tc = a.tcUY;
     const usdDe = l => l.usd != null ? l.usd : ((l.monto != null && tc) ? r2(l.monto / tc) : null);
     const noDif = lins.filter(l => !String(l.clave).startsWith('DIF_CAMBIO')), sumNoDif = noDif.every(l => usdDe(l) != null) ? r2(noDif.reduce((x,l) => x + usdDe(l), 0)) : null;
-    lins.forEach((l, i) => { const [cod, n] = nom(l.clave), u = l.monto;
-      const d = String(l.clave).startsWith('DIF_CAMBIO') ? (sumNoDif == null ? null : r2(-sumNoDif)) : usdDe(l);   // en dólares, la dif. de cambio es lo que falte para cerrar (suele ser 0)
+    const ds = lins.map(l => String(l.clave).startsWith('DIF_CAMBIO') ? (sumNoDif == null ? null : r2(-sumNoDif)) : usdDe(l));   // en dólares, la dif. de cambio es lo que falte para cerrar (suele ser 0)
+    // Redondeo: cada renglón pasado a dólares por separado puede dejar el asiento descuadrado por centavos.
+    // Lo absorbe el primer renglón calculado con el TC (el gasto / neto), igual que en el asiento en pesos.
+    if (ds.length && ds.every(d => d != null)) { const res = r2(ds.reduce((x, d) => x + d, 0)), k = lins.findIndex(l => l.usd == null && !String(l.clave).startsWith('DIF_CAMBIO'));
+      if (res && Math.abs(res) <= 0.05 && k >= 0) ds[k] = r2(ds[k] - res); }
+    lins.forEach((l, i) => { const [cod, n] = nom(l.clave), u = l.monto, d = ds[i];
       filas.push({ 'Asiento': a.id, 'Tipo': a.tipo, 'Fecha': a.fecha, 'Mes': String(a.fecha).slice(0,7), 'Concepto': a.concepto, 'Renglón': i + 1, 'Cuenta': cod, 'Nombre de la cuenta': n,
         'Debe $U': u > 0 ? u : null, 'Haber $U': u < 0 ? -u : null, 'TC (UYU/USD)': tc, 'Debe US$': d > 0 ? d : null, 'Haber US$': d < 0 ? -d : null,
         'Leyenda': l.leyenda || '', 'Falta cotización': a.falta.length ? [...new Set(a.falta)].join(', ') : '' }); }); });
