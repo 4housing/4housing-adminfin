@@ -2052,7 +2052,7 @@ function cuyAsientoMov(m){
     // Pago de facturas: Proveedores se cancela al valor con que se registró cada factura
     // parte de cada factura que cancela este pago (aplicado ÷ total) × valor con que se registró la factura
     // (la deuda se cancela en la contrapartida de cada factura: Proveedores o la cargada en el comprobante)
-    const porCta = {}, usdCta = {};
+    const porCta = {}, usdCta = {}, usdFac = {};
     cuyAplDeMov(m.id).forEach(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); if (!c) return;
       const k2 = cuyClaveContra(c), v = cuyFacValor(c, ma), ap = cuyAplEnOrigen(a), tot = cuyFacTotal(c); let val;
       if (v == null) { (cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU').length ? cuyFaltaCot(c.fecha, cuyEsUSD(c) ? 'USD' : 'UYU') : ['cotización']).forEach(f => falta.push(f + ' del ' + fmtFecha(c.fecha) + ' (factura)')); val = null; }
@@ -2060,9 +2060,14 @@ function cuyAsientoMov(m){
       else val = tot ? r2(v * ap / tot) : 0;
       porCta[k2] = (k2 in porCta && porCta[k2] == null) || val == null ? null : r2((porCta[k2] || 0) + val);
       // contador UY: dólares exactos de lo aplicado a facturas en USD (si alguna es en pesos, el equivalente sale del TC)
-      usdCta[k2] = (k2 in usdCta && usdCta[k2] == null) || !cuyEsUSD(c) || ap == null ? null : r2((usdCta[k2] || 0) + ap); });
+      usdCta[k2] = (k2 in usdCta && usdCta[k2] == null) || !cuyEsUSD(c) || ap == null ? null : r2((usdCta[k2] || 0) + ap);
+      // asiento Tango en DOL: los dólares con que se registró la factura (en pesos: a la cotización de la factura), así
+      // Proveedores en US$ cancela exacto; lo que difiera del banco es diferencia de cambio
+      const tcF = cuyEsUSD(c) ? 1 : cuyTcUY(cuyFacBase(c).fecha), apU = ap == null || !tcF ? null : (cuyEsUSD(c) ? ap : ap / tcF);
+      usdFac[k2] = (k2 in usdFac && usdFac[k2] == null) || apU == null ? null : (usdFac[k2] || 0) + apU; });
     Object.entries(porCta).forEach(([k2, suma]) => { const l = { clave: k2, monto: suma == null ? null : (imp0 < 0 ? suma : -suma), leyenda: ley };
-      if (CUY_UY && usdCta[k2] != null) l.usd = imp0 < 0 ? usdCta[k2] : -usdCta[k2]; lineas.push(l); });
+      if (CUY_UY && usdCta[k2] != null) l.usd = imp0 < 0 ? usdCta[k2] : -usdCta[k2];
+      if (CUY_UY && usdFac[k2] != null) l.usdFac = r2(imp0 < 0 ? usdFac[k2] : -usdFac[k2]); lineas.push(l); });
   } else {
     const res = k !== 'PROVEEDORES';
     lineas.push({ clave: k, monto: imp == null ? null : -imp, leyenda: ley, eerr: res ? (m.rubro || '') : undefined, auxEerr: res ? (cuyPlan(k).aux_eerr || (m.rubro ? cuyAuxEerr(m.rubro) : '')) : '', proy: res ? cuyProyCod(m.auxiliar) : '' });
@@ -2101,9 +2106,7 @@ function cuyAsientoHojas(asientos){
       nro++; const p = cuyPlan(l.clave), cod = p.codigo || ''; if (!cod) noti(l.clave, a);
       else if (CUY.dic.cuentas.length && !cuyDicCta(cod)) noti(l.clave + ' (el código ' + cod + ' no está en el diccionario)', a);
       const imp = r2(Math.abs(l.monto));
-      const cant = l.usdEq != null && r2(l.usdEq) ? r2(Math.abs(l.usdEq)) : '', tcl0 = cant ? imp / cant : null;   // US$ y su TC implícito (AR$ ÷ US$)
-      const tcl = tcl0 == null ? '' : (a.cot && Math.abs(tcl0 - a.cot.v) <= a.cot.v * 0.0005) ? a.cot.v : Math.round(tcl0 * 10000) / 10000;   // si es el billete del día salvo redondeo, el billete
-      ren.push([a.id, nro, cod, l.monto > 0 ? imp : '', l.monto < 0 ? imp : '', fecha, l.leyenda || '', tcl, cant, 'No', '']);
+      ren.push([a.id, nro, cod, l.monto > 0 ? imp : '', l.monto < 0 ? imp : '', fecha, l.leyenda || '', '', '', 'No', '']);
       // Aux 02 EERR: solo si la cuenta lo tiene cargado en el plan (las cuentas patrimoniales no llevan)
       // Auxiliares solo en cuentas que los usan (diccionario: usa_aux). Proveedores, IVA, bancos y cajas no llevan.
       const dc = cod ? cuyDicCta(cod) : null, usaAux = dc ? String(dc.usa_aux || '').toLowerCase() === 'si' : null;
@@ -2114,26 +2117,26 @@ function cuyAsientoHojas(asientos){
         if (l.proy) aux.push([a.id, nro, '03', 'INSTRUCTIVO DE FABRICACION', l.proy, '', 100, imp, l.leyenda || '']);
       }
     });
-    if (a.mon === 'USD' && a.cot) cot.push([a.id, monCod, 'COTIZACIÓN', a.cot.v, 'No', '']);   // solo si un asiento fuera en DOL (hoy todo va en PES)
+    if (a.mon === 'USD' && a.cot) cot.push([a.id, monCod, 'COTIZACIÓN', a.cot.v, 'No', '']);   // hoy no se manda: en DOL Tango usa su cotización del día
   });
   return { cab, ren, cot, aux, falta, sinCot };
 }
-// Equivalente en dólares de cada renglón del asiento Tango (columnas "Cantidad" = US$ y "Importe de la unidad adicional" = TC,
-// unidad adicional en dólares): los mismos dólares que el Excel del contador UY — facturas USD exactas, $U ÷ UYU/USD,
-// cambios de moneda al TC del banco. twin = el mismo asiento armado en modo contador UY. La dif. de cambio en US$ es lo que
-// falte para cerrar (suele ser 0: la diferencia es solo en pesos argentinos).
-function cuyConUsd(a, twin){
-  const esDif = l => String(l.clave).startsWith('DIF_CAMBIO'), tc = twin.tcUY;
-  const usdDe = l => l.usd != null ? l.usd : (l.monto != null && tc ? r2(l.monto / tc) : null);
-  const por = {}; twin.lineas.filter(l => !esDif(l)).forEach(l => { const u = usdDe(l); por[l.clave] = (l.clave in por && por[l.clave] == null) || u == null ? null : r2((por[l.clave] || 0) + u); });
-  const tot = {}; a.lineas.forEach(l => { tot[l.clave] = (tot[l.clave] || 0) + Math.abs(+l.monto || 0); });
-  a.lineas.forEach(l => { if (esDif(l)) return; const u = por[l.clave]; l.usdEq = u == null ? null : (tot[l.clave] ? r2(u * Math.abs(+l.monto || 0) / tot[l.clave]) : 0); });
-  if (a.lineas.filter(l => !esDif(l)).every(l => l.usdEq != null)) {
-    const resto = r2(-a.lineas.filter(l => !esDif(l)).reduce((x, l) => x + l.usdEq, 0)), dif = a.lineas.find(esDif);
-    if (dif) dif.usdEq = resto;
-    else if (resto && Math.abs(resto) <= 0.05) { const k = a.lineas.find(l => l.usdEq); if (k) k.usdEq = r2(k.usdEq + resto); }   // redondeo
-  }
-  return a;
+// Asiento para Tango en DÓLARES (DOL): Tango pasa a pesos con su propia cotización del día (no se manda cotización).
+// Los dólares de cada renglón son los del Excel del contador UY: facturas USD exactas, $U ÷ UYU/USD (BCU día hábil anterior),
+// cambios de moneda al TC del banco. En los pagos, Proveedores cancela con los dólares con que se registró la factura;
+// lo que no cierra (facturas en pesos pagadas otro día) es diferencia de cambio. La diferencia de cambio del peso argentino
+// no va acá: se ajusta a fin de mes con un asiento aparte.
+function cuyAsientoDol(x, fac){
+  let t; CUY_UY = true; try { t = fac ? cuyAsientoFac(x) : cuyAsientoMov(x); } finally { CUY_UY = false; }
+  const tc = t.tcUY, esDif = l => String(l.clave).startsWith('DIF_CAMBIO');
+  const usdDe = l => l.usdFac != null ? l.usdFac : l.usd != null ? l.usd : (l.monto != null && tc ? r2(l.monto / tc) : null);
+  const lin = t.lineas.filter(l => !esDif(l)).map(l => Object.assign({}, l, { monto: usdDe(l) }));
+  const ok = lin.every(l => l.monto != null);
+  if (ok) { const resto = r2(-lin.reduce((a, l) => a + l.monto, 0));
+    if (fac && resto && Math.abs(resto) <= 0.05) lin[0].monto = r2(lin[0].monto + resto);   // redondeo: lo absorbe el gasto (neto)
+    else if (Math.abs(resto) >= 0.01) { const d = t.lineas.find(esDif);
+      lin.push({ clave: resto > 0 ? 'DIF_CAMBIO_NEG' : 'DIF_CAMBIO_POS', monto: resto, leyenda: d ? d.leyenda : cuyLey(['Dif. de cambio', (lin[0] || {}).leyenda]), eerr: '' }); } }
+  return Object.assign({}, t, { mon: 'USD', cot: null, falta: ok ? [] : ['UYU/USD'], lineas: lin });
 }
 // Equivalente en US$ de un movimiento de una cuenta en pesos (el mismo que lleva su renglón en el asiento)
 function cuyMovUsdEq(m){
@@ -2146,7 +2149,7 @@ function cuyAgruparPorDia(asientos, prefijo, titulo){
   const dias = {};
   asientos.forEach(a => { const f = String(a.fecha || '').slice(0,10); (dias[f] = dias[f] || []).push(a); });
   return Object.keys(dias).sort().map(f => { const xs = dias[f];
-    return { id: prefijo + f.replace(/-/g,''), fecha: f, mon: 'ARS', cot: xs[0].cot, items: xs.map(a => a.id),
+    return { id: prefijo + f.replace(/-/g,''), fecha: f, mon: xs[0].mon || 'ARS', cot: xs[0].cot, items: xs.map(a => a.id),
       falta: [].concat(...xs.map(a => a.falta.length ? [a.id + ': ' + [...new Set(a.falta)].join(', ')] : [])),
       concepto: cuyLey([titulo, fmtFecha(f), xs.length + (xs.length === 1 ? ' ítem' : ' ítems')]),
       lineas: [].concat(...xs.map(a => a.lineas)) }; });
@@ -2224,13 +2227,12 @@ const cuyRegistrado = x => !!String(x.asiento_num || '').trim();
 function cuyRenderAsientos(){
   const fac = CUY.asTab === 'fac', ns = fac ? 'afac' : 'amov', sel = CUY.sel[fac ? 'fac' : 'mov'];
   const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
-  const asDe = x => fac ? cuyAsientoFac(x) : cuyAsientoMov(x);
-  const asDeUsd = x => { const a = asDe(x); let t; CUY_UY = true; try { t = asDe(x); } finally { CUY_UY = false; } return cuyConUsd(a, t); };
+  const asDe = x => cuyAsientoDol(x, fac);   // el asiento para Tango va en dólares (DOL)
   const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave === CUY_SIN_CTA ? 'falta cuenta contable (Comprobantes)' : l.clave);
   const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num', td:x => { const a = asDe(x);
     if (a.falta.length) return '<span class="warn" title="Cargala en Cotizaciones">⚠ falta ' + esc([...new Set(a.falta)].join(', ')) + '</span>';
     const l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
-    return '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' + '<div class="muted">PES' + (a.cot ? ' · billete ' + fmtTC(a.cot.v) + ' (' + fmtFecha(a.cot.fecha) + ')' : '') + '</div>'
+    return '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' + '<div class="muted">DOL · Tango aplica su cotización del día</div>'
       + (d ? '<div class="muted">dif. cambio ' + fmtMon(d.monto, a.mon) + '</div>' : ''); } };
   const chk = x => '<input type="checkbox" data-asel="' + esc(x.id) + '"' + (sel.has(x.id) ? ' checked' : '') + '>';
   const inpAs = x => SP.editar ? '<input class="tc-in" style="width:84px;text-align:left" data-asnum="' + esc(x.id) + '" value="' + esc(x.asiento_num || '') + '" placeholder="N° asiento" title="N° de asiento en Tango, una vez importado y revisado. Enter para guardar.">' : esc(x.asiento_num || '—');
@@ -2266,13 +2268,13 @@ function cuyRenderAsientos(){
   document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="as-uy" title="Facturación y bancos en pesos uruguayos y dólares, más registro de compras y movimientos">' + ICO.xls + 'Para el contador UY ($U / US$)</button><button class="btn" id="as-xls">' + ICO.xls + 'Exportar asiento (Tango)' + (elegidas.length ? ' · ' + elegidas.length + ' tildados' : ' · ' + pend.length + ' pendientes') + '</button>';
   document.getElementById('as-uy').addEventListener('click', cuyExportarUY);
   document.getElementById('as-xls').addEventListener('click', () => cuyAsientoExportar(
-    cuyAgruparPorDia((elegidas.length ? elegidas : pend).map(asDeUsd), fac ? 'UYFAC-' : 'UYBCO-', fac ? 'UY facturas' : 'UY bancos y caja'), fac ? 'Asiento_Tango_UY_facturas' : 'Asiento_Tango_UY_pagos'));
+    cuyAgruparPorDia((elegidas.length ? elegidas : pend).map(asDe), fac ? 'UYFAC-' : 'UYBCO-', fac ? 'UY facturas' : 'UY bancos y caja'), fac ? 'Asiento_Tango_UY_facturas' : 'Asiento_Tango_UY_pagos'));
   const sub = '<div class="mtabs" style="margin:-4px 0 14px"><button class="mtab' + (fac ? ' active' : '') + '" data-astab="fac">Registro de facturas</button><button class="mtab' + (!fac ? ' active' : '') + '" data-astab="mov">Pagos y gastos bancarios</button></div>';
   const reg = base.filter(cuyRegistrado).length;
-  const meta = fac ? 'Una por comprobante: Debe gasto (cuenta del rubro, neto) + Debe IVA compras · Haber Proveedores (total). Todo en PES (pesos argentinos): USD × billete promedio del día; UYU ÷ DGI × billete. Notas de crédito en negativo: el asiento sale invertido.'
-    : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda entre Santander USD y pesos (un solo asiento por el par, cuenta contra cuenta; la pata en pesos no aparece aparte), transferencias e ingresos (contra la cuenta cargada en el movimiento o, si no, la de su clasificación). Todo en PES (pesos argentinos).';
+  const meta = fac ? 'Una por comprobante: Debe gasto (cuenta del rubro, neto) + Debe IVA compras · Haber Proveedores (total). Todo en DOL (dólares): facturas USD por su importe; en pesos uruguayos ÷ UYU/USD (BCU). Notas de crédito en negativo: el asiento sale invertido.'
+    : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda entre Santander USD y pesos (un solo asiento por el par, cuenta contra cuenta; la pata en pesos no aparece aparte), transferencias e ingresos (contra la cuenta cargada en el movimiento o, si no, la de su clasificación). Todo en DOL (dólares).';
   $main.innerHTML = cuyTabs() + sub
-    + '<div class="meta-bar">Se exportan los tildados; si no tildás nada, los <b>pendientes</b> que se ven con los filtros. Todo en <b>pesos argentinos</b> y <b>un asiento por día</b> (Tango aplica la cotización billete de esa fecha). Se importan en Tango en Borrador; después de revisarlos cargá el N° de asiento acá para dejar constancia de que quedaron registrados (' + reg + ' de ' + base.length + ' registrados).</div>'
+    + '<div class="meta-bar">Se exportan los tildados; si no tildás nada, los <b>pendientes</b> que se ven con los filtros. Todo en <b>dólares (DOL)</b> y <b>un asiento por día</b>: Tango lo pasa a pesos con su cotización de esa fecha. La diferencia de cambio del peso argentino se ajusta a fin de mes con un asiento aparte. Se importan en Tango en Borrador; después de revisarlos cargá el N° de asiento acá para dejar constancia de que quedaron registrados (' + reg + ' de ' + base.length + ' registrados).</div>'
     + '<div class="card">' + cardH(fac ? 'Registro de facturas' : 'Pagos y gastos bancarios', meta)
     + (base.length ? tablaHerramientas(ns, 'Buscar…') + '<div class="tools" style="padding-top:0"><button class="btn ghost sm" id="as-todos">Tildar visibles</button><button class="btn ghost sm" id="as-ninguno">Destildar todo</button></div>'
         + (filas.length ? tablaHtml(ns, cols, filas, '', x => (faltaCod(x).length || asDe(x).falta.length) ? 'revisar' : '') : '<div class="empty">Nada coincide con los filtros.</div>')
