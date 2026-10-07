@@ -1284,6 +1284,7 @@ const CUY_PLAN_DEF = {
   'CONFIG:COT_DIA':         { codigo:'anterior' },
   'CONFIG:ARS_AUTO':        { codigo:'billete' },
   'CONFIG:CAMBIO_TC':       { codigo:'banco' },
+  'CONFIG:ARS_MISMO_DESDE': { codigo:'2026-10-01' },   // ARS/USD (Tango): billete del MISMO día desde esta fecha (Micaela, oct 2026)
 };
 function cuyPlan(k){
   if (String(k).startsWith('COD:')) { const cod = k.slice(4), c = CUY.dic.cuentas.find(x => x.cod === cod); return { codigo: cod, nombre: c ? c.desc : '' }; }
@@ -1353,8 +1354,12 @@ const cuySerieArmar = () => { CUY_SERIE = { ars_usd: cuySerie('ars_usd'), uyu_us
 // Criterio (Plan de cuentas, clave CONFIG:COT_DIA): 'anterior' = la del último día hábil ANTERIOR a la fecha
 // (cierre del día anterior, propuesto para UY y AR — a confirmar con los contadores); 'mismo' = la del día o la última anterior.
 const cuyCotModo = () => cuyPlan('CONFIG:COT_DIA').codigo === 'mismo' ? 'mismo' : 'anterior';
+// ARS/USD para Tango: desde CONFIG:ARS_MISMO_DESDE se toma el billete promedio del MISMO día (Tango aplica la cotización
+// del día del asiento); antes de esa fecha sigue el criterio general (lo ya registrado no cambia).
+const cuyArsMismoDesde = () => { const d = String(cuyPlan('CONFIG:ARS_MISMO_DESDE').codigo || '').trim(); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null; };
 function cuyCotDe(fecha, campo){
-  let best = null; const f = String(fecha || ''), ant = cuyCotModo() === 'anterior';
+  let best = null; const f = String(fecha || ''), desde = campo === 'ars_usd' ? cuyArsMismoDesde() : null;
+  const ant = desde && f >= desde ? false : cuyCotModo() === 'anterior';
   for (const c of (CUY_SERIE[campo] || [])) { if (ant ? c.fecha >= f : c.fecha > f) break; best = c; }
   return best ? { v: best.v, fecha: best.fecha, fuente: best.fuente, auto: !!best.auto } : null;
 }
@@ -2359,7 +2364,9 @@ function cuyRenderCot(){
     +   '<select id="ct-camtc" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
     +     '<option value="banco"' + (cuyCambioTc() === 'banco' ? ' selected' : '') + '>al TC del banco (sin dif. de cambio)</option>'
     +     '<option value="oficial"' + (cuyCambioTc() === 'oficial' ? ' selected' : '') + '>al oficial DGI (con dif. de cambio)</option></select>'
-    +   '<span style="font-size:12px;color:var(--muted)">Cotización para cada movimiento:</span>'
+    +   '<span style="font-size:12px;color:var(--muted)">ARS/USD billete del mismo día desde:</span>'
+    +   '<input type="date" id="ct-arsd" class="tc-in" style="width:140px;text-align:left" value="' + esc(cuyArsMismoDesde() || '') + '"' + (SP.editar ? '' : ' disabled') + ' title="Desde esta fecha el asiento Tango toma el billete promedio del mismo día (Tango aplica la cotización del día del asiento). Antes, el criterio de abajo. Vacío = siempre el de abajo.">'
+    +   '<span style="font-size:12px;color:var(--muted)">UYU/USD (y ARS/USD antes de esa fecha):</span>'
     +   '<select id="ct-modo" class="tc-in" style="width:auto;text-align:left"' + (SP.editar ? '' : ' disabled') + '>'
     +     '<option value="anterior"' + (cuyCotModo() === 'anterior' ? ' selected' : '') + '>la del día hábil anterior (cierre)</option>'
     +     '<option value="mismo"' + (cuyCotModo() === 'mismo' ? ' selected' : '') + '>la del mismo día</option></select></div></details>'
@@ -2390,6 +2397,8 @@ function cuyRenderCot(){
   if (ct) ct.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:CAMBIO_TC', { codigo: ct.value, nombre: 'TC de los cambios de moneda' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const ao = document.getElementById('ct-ars');
   if (ao) ao.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_AUTO', { codigo: ao.value, nombre: 'ARS/USD automático' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
+  const ad = document.getElementById('ct-arsd');
+  if (ad) ad.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:ARS_MISMO_DESDE', { codigo: ad.value || '-', nombre: 'ARS/USD billete del mismo día desde' }); toast('Guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
   const md = document.getElementById('ct-modo');
   if (md) md.addEventListener('change', async () => { try { await cuyPlanGuardar('CONFIG:COT_DIA', { codigo: md.value, nombre: 'Cotización: día anterior / mismo día' }); toast('Criterio guardado'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } });
 }
