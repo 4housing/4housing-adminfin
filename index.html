@@ -2166,7 +2166,8 @@ function cuyAsientoBajar(asientos, nombre){
 }
 // Planilla para cargar el asiento A MANO en Tango (la importación no funcionó): solo los renglones, en dólares, con el
 // TC con que se carga cada asiento (billete promedio del MISMO día: la cotización que Tango le pone al asiento de esa
-// fecha) y los auxiliares 02 EERR / 03 instructivo de fabricación en el mismo renglón. Nro. empieza en 1 en cada asiento (día).
+// fecha) y los auxiliares 02 EERR / 03 instructivo de fabricación en el mismo renglón. Un asiento por comprobante /
+// movimiento: Nro. empieza en 1 en cada uno.
 const cuyBilleteDia = f => { let b = null; for (const c of (CUY_SERIE.ars_usd || [])) { if (c.fecha > f) break; b = c; } return b; };
 function cuyAsientoManual(asientos, nombre){
   const s = cuyAsientoHojas(asientos), aux = {};
@@ -2181,7 +2182,7 @@ function cuyAsientoManual(asientos, nombre){
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Renglones');
   XLSX.writeFile(wb, nombre + '_' + hoyISO() + '.xlsx');
   const sinTc = asientos.filter(a => !cuyBilleteDia(a.fecha)).length;
-  toast(asientos.length + ' asiento' + (asientos.length === 1 ? '' : 's') + ' (uno por día) para cargar a mano' + (sinTc ? ' · ⚠ ' + sinTc + ' sin billete del día' : ''));
+  toast(asientos.length + ' asiento' + (asientos.length === 1 ? '' : 's') + ' para cargar a mano' + (sinTc ? ' · ⚠ ' + sinTc + ' sin billete del día' : ''));
 }
 function cuyAsientoExportar(asientos, nombre, bajar){
   bajar = bajar || cuyAsientoBajar;
@@ -2252,7 +2253,8 @@ function cuyRenderAsientos(){
   const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num', td:x => { const a = asDe(x);
     if (a.falta.length) return '<span class="warn" title="Cargala en Cotizaciones">⚠ falta ' + esc([...new Set(a.falta)].join(', ')) + '</span>';
     const l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
-    return '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' + '<div class="muted">DOL · Tango aplica su cotización del día</div>'
+    const b = cuyBilleteDia(String(x.fecha || ''));
+    return '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' + '<div class="muted">' + (b ? 'TC ' + fmtTC(b.v) + (b.fecha !== x.fecha ? ' (del ' + fmtFecha(b.fecha) + ')' : '') : '<span class="warn">sin TC del día</span>') + '</div>'
       + (d ? '<div class="muted">dif. cambio ' + fmtMon(d.monto, a.mon) + '</div>' : ''); } };
   const chk = x => '<input type="checkbox" data-asel="' + esc(x.id) + '"' + (sel.has(x.id) ? ' checked' : '') + '>';
   const inpAs = x => SP.editar ? '<input class="tc-in" style="width:84px;text-align:left" data-asnum="' + esc(x.id) + '" value="' + esc(x.asiento_num || '') + '" placeholder="N° asiento" title="N° de asiento en Tango, una vez importado y revisado. Enter para guardar.">' : esc(x.asiento_num || '—');
@@ -2288,7 +2290,8 @@ function cuyRenderAsientos(){
   document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="as-uy" title="Facturación y bancos en pesos uruguayos y dólares, más registro de compras y movimientos">' + ICO.xls + 'Para el contador UY ($U / US$)</button><button class="btn ghost" id="as-imp" title="Archivo de importación de Tango (4 hojas)">' + ICO.xls + 'Archivo de importación</button><button class="btn" id="as-xls" title="Renglones en US$ con el TC del día y los auxiliares, para cargar a mano en Tango">' + ICO.xls + 'Planilla para cargar en Tango' + (elegidas.length ? ' · ' + elegidas.length + ' tildados' : ' · ' + pend.length + ' pendientes') + '</button>';
   document.getElementById('as-uy').addEventListener('click', cuyExportarUY);
   const asExp = () => cuyAgruparPorDia((elegidas.length ? elegidas : pend).map(asDe), fac ? 'UYFAC-' : 'UYBCO-', fac ? 'UY facturas' : 'UY bancos y caja');
-  document.getElementById('as-xls').addEventListener('click', () => cuyAsientoExportar(asExp(), fac ? 'Asiento_UY_facturas_cargar' : 'Asiento_UY_pagos_cargar', cuyAsientoManual));
+  // planilla para cargar a mano: un asiento por comprobante / movimiento (Nro. empieza en 1 en cada uno)
+  document.getElementById('as-xls').addEventListener('click', () => cuyAsientoExportar((elegidas.length ? elegidas : pend).map(asDe).sort((a,b) => String(a.fecha).localeCompare(String(b.fecha))), fac ? 'Asiento_UY_facturas_cargar' : 'Asiento_UY_pagos_cargar', cuyAsientoManual));
   document.getElementById('as-imp').addEventListener('click', () => cuyAsientoExportar(asExp(), fac ? 'Asiento_Tango_UY_facturas' : 'Asiento_Tango_UY_pagos'));
   const sub = '<div class="mtabs" style="margin:-4px 0 14px"><button class="mtab' + (fac ? ' active' : '') + '" data-astab="fac">Registro de facturas</button><button class="mtab' + (!fac ? ' active' : '') + '" data-astab="mov">Pagos y gastos bancarios</button></div>';
   const reg = base.filter(cuyRegistrado).length;
@@ -2309,13 +2312,12 @@ function cuyRenderAsientos(){
   $main.querySelectorAll('[data-asnum]').forEach(inp => {
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
     inp.addEventListener('change', async () => {
-      const id = inp.dataset.asnum, v = inp.value.trim() || null, x0 = base.find(x => x.id === id);
-      // El asiento de Tango es uno por día: el N° va también a los demás ítems de esa fecha que no tengan N°
-      const mismos = v && x0 ? base.filter(x => x.id !== id && x.fecha === x0.fecha && !cuyRegistrado(x)) : [];
+      const id = inp.dataset.asnum, v = inp.value.trim() || null;
+      // El N° va solo a este comprobante / movimiento (se carga asiento por asiento en Tango); en un cambio de moneda,
+      // a sus dos patas (es un solo asiento)
       const guardar = async xid => { if (fac) await cuyUpdate(xid, { asiento_num: v }); else { await cuyMovGuardar(xid, { asiento_num: v });
               const mm = CUY.movs.find(x => x.id === xid); if (mm && cuyContraMov(mm) === 'CAMBIO') await cuyMovGuardar(CUY_ESP[xid].id, { asiento_num: v }); } };   // el cambio es un solo asiento: el N° va a las dos patas
-      try { await guardar(id); for (const x of mismos) await guardar(x.id);
-        sel.delete(id); mismos.forEach(x => sel.delete(x.id)); toast(v ? 'N° de asiento guardado' + (mismos.length ? ' en ' + (mismos.length + 1) + ' ítems del ' + fmtFecha(x0.fecha) : '') : 'N° de asiento borrado'); cuyRender(); }
+      try { await guardar(id); sel.delete(id); toast(v ? 'N° de asiento guardado' : 'N° de asiento borrado'); cuyRender(); }
       catch (e) { toast('No se guardó: ' + (e.message || e)); }
     });
   });
