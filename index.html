@@ -2164,11 +2164,31 @@ function cuyAsientoBajar(asientos, nombre){
   const items = asientos.reduce((n,a) => n + ((a.items || [a.id]).length), 0);
   toast(asientos.length + ' asiento' + (asientos.length === 1 ? '' : 's') + ' (uno por día) con ' + items + ' ítem' + (items === 1 ? '' : 's') + ' generado' + (asientos.length === 1 ? '' : 's'));
 }
-function cuyAsientoExportar(asientos, nombre){
+// Planilla para cargar el asiento A MANO en Tango (la importación no funcionó): solo los renglones, en dólares, con el
+// TC con que se carga cada asiento (billete promedio del MISMO día: la cotización que Tango le pone al asiento de esa
+// fecha) y los auxiliares 02 EERR / 03 instructivo de fabricación en el mismo renglón. Nro. empieza en 1 en cada asiento (día).
+const cuyBilleteDia = f => { let b = null; for (const c of (CUY_SERIE.ars_usd || [])) { if (c.fecha > f) break; b = c; } return b; };
+function cuyAsientoManual(asientos, nombre){
+  const s = cuyAsientoHojas(asientos), aux = {};
+  s.aux.slice(1).forEach(x => { const k = x[0] + '|' + x[1]; aux[k] = aux[k] || {}; if (x[2] === '02') aux[k].eerr = x[5] || x[4]; else if (x[2] === '03') aux[k].proy = x[4]; });
+  const fechaDe = {}; asientos.forEach(a => { fechaDe[a.id] = a.fecha; });
+  const aoa = [['Nro.', 'Fecha de origen', 'Leyenda', 'Código de cuenta', 'Debe', 'Haber', 'TC', 'EERR', 'INSTRUCTIVO DE FABRICACION']];
+  s.ren.slice(1).forEach(x => { const b = cuyBilleteDia(fechaDe[x[0]]), a = aux[x[0] + '|' + x[1]] || {};
+    aoa.push([x[1], x[5], x[6], x[2], x[3], x[4], b ? b.v : '', a.eerr || '', a.proy || '']); });
+  const ws = cuyHojaConFechas(aoa, [1]);
+  for (let r = 1; r < aoa.length; r++) [4, 5, 6].forEach(c => { const k = XLSX.utils.encode_cell({ r, c }); if (ws[k] && ws[k].t === 'n') ws[k].z = '#,##0.00'; });
+  ws['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 55 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Renglones');
+  XLSX.writeFile(wb, nombre + '_' + hoyISO() + '.xlsx');
+  const sinTc = asientos.filter(a => !cuyBilleteDia(a.fecha)).length;
+  toast(asientos.length + ' asiento' + (asientos.length === 1 ? '' : 's') + ' (uno por día) para cargar a mano' + (sinTc ? ' · ⚠ ' + sinTc + ' sin billete del día' : ''));
+}
+function cuyAsientoExportar(asientos, nombre, bajar){
+  bajar = bajar || cuyAsientoBajar;
   if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
   if (!asientos.length) { toast('No hay nada para exportar'); return; }
   const s = cuyAsientoHojas(asientos), faltan = Object.keys(s.falta);
-  if (!faltan.length && !s.sinCot.length) { cuyAsientoBajar(asientos, nombre); return; }
+  if (!faltan.length && !s.sinCot.length) { bajar(asientos, nombre); return; }
   abrirModal('Faltan datos para el asiento',
     '<p style="margin:0 0 8px;font-size:12.5px;color:#5f5c52;line-height:1.5">Así como está, Tango lo va a rechazar o va a quedar incompleto. Completá el <b>Plan de cuentas</b> y las <b>Cotizaciones</b> y volvé a exportar.</p><div class="hist" style="max-height:300px">'
     + faltan.map(k => '<div class="it"><b>' + esc(k === CUY_SIN_CTA ? 'Comprobantes sin cuenta contable (cargala en la solapa Comprobantes)' : k) + '</b>' + (k.includes('no está en el diccionario') || k.includes('auxiliares') ? '' : ' sin código') + ' · ' + s.falta[k].length + ' asiento(s)</div>').join('')
@@ -2176,7 +2196,7 @@ function cuyAsientoExportar(asientos, nombre){
     '<button class="btn ghost" id="ae-cot">Ir a cotizaciones</button><button class="btn ghost" id="ae-plan">Ir al plan de cuentas</button><button class="btn ghost" id="ae-igual">Exportar igual</button>', 'wide');
   document.getElementById('ae-plan').addEventListener('click', () => { cerrarModal(); CUY.tab = 'plan'; cuyRender(); });
   document.getElementById('ae-cot').addEventListener('click', () => { cerrarModal(); CUY.tab = 'cot'; cuyRender(); });
-  document.getElementById('ae-igual').addEventListener('click', () => { cerrarModal(); cuyAsientoBajar(asientos, nombre); });
+  document.getElementById('ae-igual').addEventListener('click', () => { cerrarModal(); bajar(asientos, nombre); });
 }
 // Para el contador de Uruguay: los mismos asientos (facturación y bancos) en pesos uruguayos y su equivalente en dólares,
 // más el registro de compras y los movimientos de bancos / caja. Criterio: facturas USD con su TC; cambios de moneda al TC
@@ -2265,10 +2285,11 @@ function cuyRenderAsientos(){
   TABLAS[ns] = { cols, base: () => base };
   const filas = tablaFiltrar(ns, cols, base, txt);
   const pend = filas.filter(x => !cuyRegistrado(x)), elegidas = base.filter(x => sel.has(x.id));
-  document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="as-uy" title="Facturación y bancos en pesos uruguayos y dólares, más registro de compras y movimientos">' + ICO.xls + 'Para el contador UY ($U / US$)</button><button class="btn" id="as-xls">' + ICO.xls + 'Exportar asiento (Tango)' + (elegidas.length ? ' · ' + elegidas.length + ' tildados' : ' · ' + pend.length + ' pendientes') + '</button>';
+  document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="as-uy" title="Facturación y bancos en pesos uruguayos y dólares, más registro de compras y movimientos">' + ICO.xls + 'Para el contador UY ($U / US$)</button><button class="btn ghost" id="as-imp" title="Archivo de importación de Tango (4 hojas)">' + ICO.xls + 'Archivo de importación</button><button class="btn" id="as-xls" title="Renglones en US$ con el TC del día y los auxiliares, para cargar a mano en Tango">' + ICO.xls + 'Planilla para cargar en Tango' + (elegidas.length ? ' · ' + elegidas.length + ' tildados' : ' · ' + pend.length + ' pendientes') + '</button>';
   document.getElementById('as-uy').addEventListener('click', cuyExportarUY);
-  document.getElementById('as-xls').addEventListener('click', () => cuyAsientoExportar(
-    cuyAgruparPorDia((elegidas.length ? elegidas : pend).map(asDe), fac ? 'UYFAC-' : 'UYBCO-', fac ? 'UY facturas' : 'UY bancos y caja'), fac ? 'Asiento_Tango_UY_facturas' : 'Asiento_Tango_UY_pagos'));
+  const asExp = () => cuyAgruparPorDia((elegidas.length ? elegidas : pend).map(asDe), fac ? 'UYFAC-' : 'UYBCO-', fac ? 'UY facturas' : 'UY bancos y caja');
+  document.getElementById('as-xls').addEventListener('click', () => cuyAsientoExportar(asExp(), fac ? 'Asiento_UY_facturas_cargar' : 'Asiento_UY_pagos_cargar', cuyAsientoManual));
+  document.getElementById('as-imp').addEventListener('click', () => cuyAsientoExportar(asExp(), fac ? 'Asiento_Tango_UY_facturas' : 'Asiento_Tango_UY_pagos'));
   const sub = '<div class="mtabs" style="margin:-4px 0 14px"><button class="mtab' + (fac ? ' active' : '') + '" data-astab="fac">Registro de facturas</button><button class="mtab' + (!fac ? ' active' : '') + '" data-astab="mov">Pagos y gastos bancarios</button></div>';
   const reg = base.filter(cuyRegistrado).length;
   const meta = fac ? 'Una por comprobante: Debe gasto (cuenta del rubro, neto) + Debe IVA compras · Haber Proveedores (total). Todo en DOL (dólares): facturas USD por su importe; en pesos uruguayos ÷ UYU/USD (BCU). Notas de crédito en negativo: el asiento sale invertido.'
