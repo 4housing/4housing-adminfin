@@ -1472,7 +1472,18 @@ function cuyTabs(){
   return '<div class="mtabs" style="margin:4px 0 14px">' + CUY_TABS.map(([id,l]) => '<button class="mtab' + (CUY.tab === id ? ' active' : '') + '" data-cuytab="' + id + '">' + l + '</button>').join('') + '</div>';
 }
 function cuyTabsEventos(){ $main.querySelectorAll('[data-cuytab]').forEach(b => b.addEventListener('click', () => { CUY.tab = b.dataset.cuytab; cuyRender(); })); }
+// Al volver a dibujar la MISMA vista (después de guardar un N° de asiento, un TC, una cuenta…) se mantiene la posición:
+// el scroll de la página y el de cada tabla. Si cambió la solapa, arranca desde arriba.
+let CUY_VISTA = '';
 function cuyRender(){
+  const vista = [CUY.tab, CUY.asTab, CUY.ctaSel && JSON.stringify(CUY.ctaSel)].join('|'), misma = vista === CUY_VISTA;
+  const y = window.scrollY, x = window.scrollX, tablas = misma ? [...$main.querySelectorAll('.tbl-hscroll')].map(t => [t.scrollTop, t.scrollLeft]) : [];
+  CUY_VISTA = vista; cuyRender0();
+  if (!misma) return;
+  $main.querySelectorAll('.tbl-hscroll').forEach((t, i) => { if (tablas[i]) { t.scrollTop = tablas[i][0]; t.scrollLeft = tablas[i][1]; } });
+  window.scrollTo(x, y);
+}
+function cuyRender0(){
   CUY_ESP = cuyEspejos(); cuySerieArmar();
   if (CUY.tab === 'comp') return cuyRenderComp();
   document.getElementById('topActions').innerHTML = '';
