@@ -396,7 +396,7 @@ async function spCargar(){
       selTodo('compras_solicitudes_pago', '*', 'id'),
       selTodo('compras_pend_facturar', '*', 'id'),
       selTodo('compras_pagos_realizar', '*', 'id'),
-      selTodo('compras_oc_informe', 'oc_numero, proveedor_cod, clasif_cod, remito_numero, comprobante_numero, comprador', 'id'),
+      selTodo('compras_oc_informe', 'oc_numero, proveedor_cod, clasif_cod, remito_numero, comprobante_numero, comprador, fecha_emision', 'id'),
       selTodo('compras_proveedores', 'codigo, razon, comercial', 'id'),
       selTodo('compras_informes_meta', '*', null),
     ]);
@@ -413,6 +413,14 @@ async function spCargar(){
 }
 
 /* ---------- Constancia de los informes ---------- */
+// Período que cubre el Informe OC cargado (fecha de emisión de las OC): recordatorio de desde qué fecha exportarlo
+// de Tango la próxima vez (cada carga reemplaza la anterior, así que tiene que volver a abarcar todo el período).
+function ociPeriodoNota(){
+  const fs = SP.oci.map(r => String(r.fecha_emision || '').slice(0,10)).filter(f => /^\d{4}-\d{2}-\d{2}$/.test(f)).sort();
+  if (!fs.length) return '';
+  return '<div style="margin-top:6px"><b>📌 Informe OC:</b> trae OC emitidas del <b>' + fmtFecha(fs[0]) + '</b> al ' + fmtFecha(fs[fs.length - 1])
+    + ' (' + new Set(SP.oci.map(r => r.oc_numero)).size + ' OC). Para actualizarlo, exportalo de Tango <b>desde el ' + fmtFecha(fs[0]) + '</b> hasta hoy: la carga nueva reemplaza a la anterior.</div>';
+}
 function metaDe(inf){ return SP.meta.find(m => m.informe === inf) || null; }
 function metaTxt(inf){
   const m = metaDe(inf); if (!m) return 'todavía no se cargó';
@@ -561,7 +569,8 @@ function spRenderSol(){
   $main.innerHTML =
       '<div class="mtabs" style="margin:4px 0 14px">' + tab('pendfac','Pendientes de facturar') + tab('solicitudes','Pagos solicitados') + tab('pagos','Pagos a realizar') + '</div>'
     + '<div class="meta-bar"><strong>Informes de Tango</strong> (los carga Administración y Finanzas; Compras los consulta; cada carga reemplaza la anterior): '
-    +   INFORMES.map(([k,l]) => '<span style="white-space:nowrap">' + esc(l) + ': ' + esc(metaTxt(k)) + '</span>').join(' &nbsp;·&nbsp; ') + '</div>'
+    +   INFORMES.map(([k,l]) => '<span style="white-space:nowrap">' + esc(l) + ': ' + esc(metaTxt(k)) + '</span>').join(' &nbsp;·&nbsp; ')
+    +   ociPeriodoNota() + '</div>'
     + '<div class="card">' + (SP.tab === 'pendfac' ? vistaPendFac() : SP.tab === 'pagos' ? vistaPagos() : vistaSolicitudes()) + '</div>';
   $main.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { SP.tab = b.dataset.tab; spRender(); }));
   $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
@@ -674,17 +683,18 @@ function vistaPagos(){
     { id:'aux', t:'Auxiliar', v:r => val(r,'aux'), td:r => lista(r,'aux') },
     { id:'oc', t:'Orden de compra', v:r => val(r,'oc'), td:r => lista(r,'oc') },
     { id:'rem', t:'Remito', v:r => val(r,'rem'), td:r => lista(r,'rem') },
+    { id:'comp', t:'Comprador', v:r => { const x = m(r); return x && x.comp ? x.comp : '(sin comprador)'; }, td:r => { const x = m(r); return x && x.comp ? esc(x.comp) : '<span class="muted">—</span>'; } },
   ];
   TABLAS.pagos = { cols, base:() => rows };
-  const head = cardH('Pagos a realizar', 'Reporte de Tango con el Auxiliar, la OC y el Remito de cada factura (del Informe OC, por proveedor + N° de comprobante). La columna Pago muestra si Compras ya pidió el pago de esa factura. Última actualización: ' + esc(metaTxt('pagos_realizar')) + '.');
+  const head = cardH('Pagos a realizar', 'Reporte de Tango con el Auxiliar, la OC, el Remito y el Comprador de cada factura (del Informe OC, por proveedor + N° de comprobante). La columna Pago muestra si Compras ya pidió el pago de esa factura. Última actualización: ' + esc(metaTxt('pagos_realizar')) + '.');
   if (!rows.length) return head + '<div class="empty">Todavía no hay datos: cargá el informe "Pagos a realizar".</div>';
-  const visibles = tablaFiltrar('pagos', cols, rows, r => [r.proveedor_cod, provNombre(r.proveedor_cod), r.comprobante_numero, r.tipo_comprobante, val(r,'aux'), val(r,'oc'), val(r,'rem')].join(' '));
+  const visibles = tablaFiltrar('pagos', cols, rows, r => [r.proveedor_cod, provNombre(r.proveedor_cod), r.comprobante_numero, r.tipo_comprobante, val(r,'aux'), val(r,'oc'), val(r,'rem'), (m(r) || {}).comp].join(' '));
   const sinMatch = rows.filter(r => !m(r)).length;
   const total = visibles.reduce((a,r) => a + (+r.total_pend_cte||0), 0);
   const aviso = !SP.oci.length ? '<div class="err" style="padding:10px 14px 0">No hay Informe OC cargado: no se pueden completar Auxiliar / OC / Remito.</div>'
     : (sinMatch ? '<div class="muted" style="padding:10px 14px 0;font-size:11.5px">' + sinMatch + ' de ' + rows.length + ' facturas no aparecen en el Informe OC (por ejemplo, facturas sin OC, o un Informe OC desactualizado): quedan con "—".</div>' : '');
-  const pie = '<tfoot><tr><td colspan="6" class="num"><b>Total (' + visibles.length + (visibles.length !== rows.length ? ' de ' + rows.length : '') + ')</b></td><td class="num"><b>' + fmtNum(total) + '</b></td><td colspan="3"></td></tr></tfoot>';
-  return head + aviso + tablaHerramientas('pagos', 'Buscar proveedor, comprobante, auxiliar, OC o remito…')
+  const pie = '<tfoot><tr><td colspan="6" class="num"><b>Total (' + visibles.length + (visibles.length !== rows.length ? ' de ' + rows.length : '') + ')</b></td><td class="num"><b>' + fmtNum(total) + '</b></td><td colspan="4"></td></tr></tfoot>';
+  return head + aviso + tablaHerramientas('pagos', 'Buscar proveedor, comprobante, auxiliar, OC, remito o comprador…')
     + (visibles.length ? tablaHtml('pagos', cols, visibles, pie) : '<div class="empty">Ninguna factura coincide con los filtros.</div>');
 }
 
