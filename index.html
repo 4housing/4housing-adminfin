@@ -2106,6 +2106,9 @@ function cuyAsientoFac(r){
 // Contrapartida del asiento de un movimiento:
 //   pago de facturas → Proveedores · cambio de moneda emparejado → la otra cuenta (un solo asiento, 'CAMBIO') ·
 //   contrapartida cargada en el movimiento (código Tango) → esa · gasto bancario → Gastos bancarios · si no, por clasificación.
+// Pago de facturas que NO van contra Proveedores (p. ej. pagadas en efectivo con la caja como contrapartida): el asiento de
+// la factura ya acredita la caja / banco, así que el movimiento no lleva asiento propio (si no, la caja sale dos veces).
+const cuyMovEnFactura = m => { const cs = cuyCompDeMov(m.id); return cs.length > 0 && cs.every(r => cuyClaveContra(r) !== 'PROVEEDORES'); };
 function cuyContraMov(m){
   if (cuyCompDeMov(m.id).length) return 'PROVEEDORES';
   if (CUY_ESP[m.id] && cuyEsCambio(m)) return 'CAMBIO';
@@ -2307,7 +2310,7 @@ function cuyAsientoExportar(asientos, nombre, bajar){
 function cuyExportarUY(){
   if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
   CUY_ESP = cuyEspejos(); cuySerieArmar();
-  const movs = CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
+  const movs = CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') && !cuyMovEnFactura(m));
   let asientos;
   CUY_UY = true;
   try { asientos = CUY.lista.map(r => Object.assign(cuyAsientoFac(r), { tipo:'Factura' })).concat(movs.map(m => Object.assign(cuyAsientoMov(m), { tipo:'Banco / caja' }))); }
@@ -2471,13 +2474,21 @@ const cuyAsSub = () => '<div class="mtabs" style="margin:-4px 0 14px">' + [['fac
 function cuyRenderAsientos(){
   if (CUY.asTab === 'cierre') return cuyRenderCierre();
   const fac = CUY.asTab === 'fac', ns = fac ? 'afac' : 'amov', sel = CUY.sel[fac ? 'fac' : 'mov'];
-  const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
+  const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') && !cuyMovEnFactura(m));
   const asDe = x => cuyAsientoDol(x, fac);   // el asiento para Tango va en dólares (DOL)
   const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave === CUY_SIN_CTA ? 'falta cuenta contable (Comprobantes)' : l.clave);
+  // Importe en US$ del asiento: Proveedores (o, si la factura se pagó en efectivo / tiene otra contrapartida, el total
+  // del Haber); en movimientos, el renglón del banco / caja
+  const linPpal = a => {
+    if (!fac) return a.lineas.find(y => y.clave.startsWith('CUENTA:'));
+    const p = a.lineas.find(y => y.clave === 'PROVEEDORES'); if (p) return p;
+    const h = a.lineas.filter(y => !String(y.clave).startsWith('DIF_CAMBIO') && y.monto != null && y.monto < 0);
+    return h.length ? { monto: h.reduce((s, y) => s + y.monto, 0) } : null;
+  };
   const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num',
-    s:x => { const a = asDe(x), l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')); return l && l.monto != null ? Math.abs(l.monto) : null; }, td:x => { const a = asDe(x);
+    s:x => { const l = linPpal(asDe(x)); return l && l.monto != null ? Math.abs(l.monto) : null; }, td:x => { const a = asDe(x);
     if (a.falta.length) return '<span class="warn" title="Cargala en Cotizaciones">⚠ falta ' + esc([...new Set(a.falta)].join(', ')) + '</span>';
-    const l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
+    const l = linPpal(a), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
     const b = cuyBilleteDia(String(x.fecha || ''));
     return (l && l.monto != null ? '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' : '<span class="muted">—</span>') + '<div class="muted">' + (b ? 'TC ' + fmtTC(b.v) + (b.fecha !== x.fecha ? ' (del ' + fmtFecha(b.fecha) + ')' : '') : '<span class="warn">sin TC del día</span>') + '</div>'
       + (d ? '<div class="muted">dif. cambio ' + fmtMon(d.monto, a.mon) + '</div>' : ''); } };
