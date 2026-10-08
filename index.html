@@ -459,6 +459,13 @@ function tablaHerramientas(ns, placeholder){
     + (tablaHayFiltros(ns) ? '<button class="btn ghost sm" data-limpiar="' + ns + '">Limpiar filtros</button>' : '')
     + '<button class="btn ghost sm" data-ajustar="' + ns + '">Auto-ajustar columnas</button></div>';
 }
+// "Ordenar por" visible (además del clic en el título): columnas que se pueden ordenar + sentido
+function tablaOrdenHtml(ns, cols){
+  const o = SP.sort[ns] || {}, ops = cols.filter(c => c.t && (c.s || c.fecha || c.v));
+  return '<span style="font-size:12px;color:var(--muted)">Ordenar por</span><select class="tc-in" style="width:auto;text-align:left" data-ordsel="' + ns + '"><option value="">(como viene)</option>'
+    + ops.map(c => '<option value="' + c.id + '"' + (o.col === c.id ? ' selected' : '') + '>' + esc(c.t) + '</option>').join('') + '</select>'
+    + (o.col ? '<button class="btn ghost sm" data-orddir="' + ns + '" title="Cambiar el sentido">' + (o.dir === -1 ? '▼ mayor a menor' : '▲ menor a mayor') + '</button>' : '');
+}
 function tablaHtml(ns, cols, filas, pie, claseFila){
   const on = c => (c.fecha ? !!(SP.fecha[ns]||{})[c.id] : !!(SP.colf[ns]||{})[c.id]);
   const o = SP.sort[ns];
@@ -480,6 +487,9 @@ function tablaEventos(){
   $main.querySelectorAll('[data-limpiar]').forEach(b => b.addEventListener('click', () => { SP.colf[b.dataset.limpiar] = {}; SP.fecha[b.dataset.limpiar] = {}; spRender(); }));
   $main.querySelectorAll('[data-ajustar]').forEach(b => b.addEventListener('click', () => { try { localStorage.removeItem('adminfin:colw:' + b.dataset.ajustar); } catch(e) {} spRender(); }));
   $main.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const [ns, col] = b.dataset.f.split('|'); filtroAbrir(ns, col, b); }));
+  $main.querySelectorAll('[data-ordsel]').forEach(se => se.addEventListener('change', () => { const ns = se.dataset.ordsel;
+    if (se.value) SP.sort[ns] = { col: se.value, dir: 1 }; else delete SP.sort[ns]; spRender(); }));
+  $main.querySelectorAll('[data-orddir]').forEach(b => b.addEventListener('click', () => { const o = SP.sort[b.dataset.orddir]; if (o) { o.dir = -o.dir; spRender(); } }));
   $main.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', e => {
     if (e.target.closest('.xlfbtn, .col-resizer')) return;
     const [ns, col] = th.dataset.sort.split('|'); const o = SP.sort[ns];
@@ -2271,7 +2281,8 @@ function cuyRenderAsientos(){
   const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD'));
   const asDe = x => cuyAsientoDol(x, fac);   // el asiento para Tango va en dólares (DOL)
   const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave === CUY_SIN_CTA ? 'falta cuenta contable (Comprobantes)' : l.clave);
-  const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num', td:x => { const a = asDe(x);
+  const colTango = { id:'tango', t:'En Tango', v:x => asDe(x).falta.length ? 'Falta cotización' : 'Con cotización', cls:'num',
+    s:x => { const a = asDe(x), l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')); return l && l.monto != null ? Math.abs(l.monto) : null; }, td:x => { const a = asDe(x);
     if (a.falta.length) return '<span class="warn" title="Cargala en Cotizaciones">⚠ falta ' + esc([...new Set(a.falta)].join(', ')) + '</span>';
     const l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
     const b = cuyBilleteDia(String(x.fecha || ''));
@@ -2280,6 +2291,8 @@ function cuyRenderAsientos(){
   const chk = x => '<input type="checkbox" data-asel="' + esc(x.id) + '"' + (sel.has(x.id) ? ' checked' : '') + '>';
   const inpAs = x => SP.editar ? '<input class="tc-in" style="width:84px;text-align:left" data-asnum="' + esc(x.id) + '" value="' + esc(x.asiento_num || '') + '" placeholder="N° asiento" title="N° de asiento en Tango, una vez importado y revisado. Enter para guardar.">' : esc(x.asiento_num || '—');
   const colAs = { id:'as', t:'Registro', v:x => cuyRegistrado(x) ? 'Registrado' : 'Pendiente', td:x => '<span class="badge ' + (cuyRegistrado(x) ? 'b-verde' : 'b-ambar') + '">' + (cuyRegistrado(x) ? 'Registrado' : 'Pendiente') + '</span>' };
+  // N° de asiento: ordena como número (vacíos al final)
+  const colNum = { id:'num', t:'N° asiento Tango', s:x => { const t = String(x.asiento_num || '').trim(), n = parseFloat(t); return !t ? null : isNaN(n) ? t : n; }, td:inpAs };
   const colCod = { id:'cod', t:'Cuentas', v:x => faltaCod(x).length ? 'Faltan códigos' : 'Completas', td:x => { const f = faltaCod(x); return f.length ? '<span style="color:#b3853a" title="' + esc(f.join(' · ')) + '">⚠ ' + esc(f.join(' · ')) + '</span>' : '<span class="muted">✓</span>'; } };
   const cols = fac ? [
     { id:'sel', t:'', td:chk },
@@ -2289,8 +2302,11 @@ function cuyRenderAsientos(){
     { id:'rubro', t:'Rubro', v:r => r.rubro || '(sin rubro)', td:r => esc(r.rubro || '—') },
     { id:'proy', t:'Proyecto', v:r => r.proyecto || '(sin proyecto)', td:r => esc(r.proyecto || '—') },
     { id:'tot', t:'Total origen', s:r => cuyNum(cuyEsUSD(r) ? r.total_usd : r.total_uyu), cls:'num', td:r => fmtMon(cuyNum(cuyEsUSD(r) ? r.total_usd : r.total_uyu), cuyEsUSD(r) ? 'USD' : 'UYU') },
-    { id:'tc', t:'TC', cls:'num', td:r => cuyEsUSD(r) ? (cuyTcPend(r) ? '<span class="badge b-ambar">pendiente</span>' : fmtTC(r.tc)) : '<span class="muted">—</span>' },
-    colTango, colCod, colAs, { id:'num', t:'N° asiento Tango', td:inpAs } ]
+    { id:'cta', t:'Cuenta contable', v:r => { const c = String(r.cuenta_gasto || '').trim(); return c ? c + ' · ' + ((cuyDicCta(c) || {}).desc || '') : '(sin cuenta)'; },
+      s:r => String(r.cuenta_gasto || '').trim() || null,
+      td:r => { const c = String(r.cuenta_gasto || '').trim(); return c ? esc(c) + '<div class="muted">' + esc((cuyDicCta(c) || {}).desc || '') + '</div>' : '<span class="warn">sin cuenta</span>'; } },
+    { id:'tc', t:'TC', cls:'num', s:r => cuyNum(r.tc), td:r => cuyEsUSD(r) ? (cuyTcPend(r) ? '<span class="badge b-ambar">pendiente</span>' : fmtTC(r.tc)) : '<span class="muted">—</span>' },
+    colTango, colCod, colAs, colNum ]
   : [
     { id:'sel', t:'', td:chk },
     { id:'fecha', t:'Fecha', fecha:m => m.fecha, td:m => fmtFecha(m.fecha) },
@@ -2303,7 +2319,7 @@ function cuyRenderAsientos(){
         if (k === 'CAMBIO') { const e = CUY_ESP[m.id]; return '↔ ' + esc(e.cuenta) + ' ' + fmtMon(+e.importe, cuyCta(e.cuenta).mon) + '<div class="muted">un solo asiento por el cambio</div>'; }
         if (k.startsWith('COD:')) { const p = cuyPlan(k); return esc(p.codigo) + (p.nombre ? ' · ' + esc(p.nombre) : '') + '<div class="muted">cargada en el movimiento</div>'; }
         return esc(k); } },
-    colTango, colCod, colAs, { id:'num', t:'N° asiento Tango', td:inpAs } ];
+    colTango, colCod, colAs, colNum ];
   const txt = fac ? cuyTexto : (m => [m.concepto, m.cuenta, m.clasificacion, m.proveedor, m.asiento_num].join(' '));
   TABLAS[ns] = { cols, base: () => base };
   const filas = tablaFiltrar(ns, cols, base, txt);
@@ -2319,9 +2335,9 @@ function cuyRenderAsientos(){
   const meta = fac ? 'Una por comprobante: Debe gasto (cuenta del rubro, neto) + Debe IVA compras · Haber Proveedores (total). Todo en DOL (dólares): facturas USD por su importe; en pesos uruguayos ÷ UYU/USD (BCU). Notas de crédito en negativo: el asiento sale invertido.'
     : 'Una por movimiento: pago (Debe Proveedores al valor registrado de la factura · Haber banco/caja, la diferencia va a diferencia de cambio), gasto bancario (Debe gasto · Haber banco, el respaldo es el extracto), cambio de moneda entre Santander USD y pesos (un solo asiento por el par, cuenta contra cuenta; la pata en pesos no aparece aparte), transferencias e ingresos (contra la cuenta cargada en el movimiento o, si no, la de su clasificación). Todo en DOL (dólares).';
   $main.innerHTML = cuyTabs() + sub
-    + '<div class="meta-bar">Se exportan los tildados; si no tildás nada, los <b>pendientes</b> que se ven con los filtros. Todo en <b>dólares (DOL)</b> y <b>un asiento por día</b>: Tango lo pasa a pesos con su cotización de esa fecha. La diferencia de cambio del peso argentino se ajusta a fin de mes con un asiento aparte. Se importan en Tango en Borrador; después de revisarlos cargá el N° de asiento acá para dejar constancia de que quedaron registrados (' + reg + ' de ' + base.length + ' registrados).</div>'
+    + '<div class="meta-bar">Se exportan los tildados; si no tildás nada, los <b>pendientes</b> que se ven con los filtros. Todo en <b>dólares (DOL)</b>, un asiento por comprobante / movimiento con el <b>TC</b> del día (columna En Tango). La diferencia de cambio del peso argentino se ajusta a fin de mes con un asiento aparte. Se importan en Tango en Borrador; después de revisarlos cargá el N° de asiento acá para dejar constancia de que quedaron registrados (' + reg + ' de ' + base.length + ' registrados).</div>'
     + '<div class="card">' + cardH(fac ? 'Registro de facturas' : 'Pagos y gastos bancarios', meta)
-    + (base.length ? tablaHerramientas(ns, 'Buscar…') + '<div class="tools" style="padding-top:0"><button class="btn ghost sm" id="as-todos">Tildar visibles</button><button class="btn ghost sm" id="as-ninguno">Destildar todo</button></div>'
+    + (base.length ? tablaHerramientas(ns, 'Buscar…') + '<div class="tools" style="padding-top:0"><button class="btn ghost sm" id="as-todos">Tildar visibles</button><button class="btn ghost sm" id="as-ninguno">Destildar todo</button><span style="margin-left:auto"></span>' + tablaOrdenHtml(ns, cols) + '</div>'
         + (filas.length ? tablaHtml(ns, cols, filas, '', x => (faltaCod(x).length || asDe(x).falta.length) ? 'revisar' : '') : '<div class="empty">Nada coincide con los filtros.</div>')
       : '<div class="empty">No hay ' + (fac ? 'comprobantes' : 'movimientos') + '.</div>')
     + '</div>';
