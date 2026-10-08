@@ -1147,7 +1147,7 @@ function cuyForm(id, preset){
     + '<div class="frow c3">' + inp('cf-serie','Serie / N°', c.serie_numero, ' placeholder="Ej. A-34989"') + inp('cf-rubro','Rubro', c.rubro, ' list="dl-rubro"') + inp('cf-proy','Proyecto', c.proyecto, ' list="dl-proy" placeholder="Ej. PL0090"') + '</div>'
     + '<div class="frow">' + inp('cf-conc','Concepto', c.concepto) + '</div>'
     + '<div class="frow c4"><div class="field"><label>Moneda de la factura *</label><select id="cf-mon"><option value="USD"' + (usd ? ' selected' : '') + '>USD (dólares)</option><option value="UYU"' + (!usd ? ' selected' : '') + '>UYU (pesos)</option></select></div>'
-    +   inp('cf-neto','Neto', m('neto'), ' type="number" step="0.01"') + inp('cf-iva','IVA', m('iva'), ' type="number" step="0.01"') + inp('cf-total','Total *', m('total'), ' type="number" step="0.01"') + '</div>'
+    +   inp('cf-neto','Neto', m('neto'), ' type="number" step="0.01"') + '<div class="field"><label>IVA (% · importe)</label><div style="display:flex;gap:6px;align-items:center"><input id="cf-piva" type="number" step="0.01" min="0" style="width:72px" value="' + esc(m('neto') !== '' && +m('neto') && m('iva') !== '' ? Math.round(m('iva') / m('neto') * 100) : 22) + '" title="% de IVA (22 por defecto; 10 tasa mínima; 0 si no tiene IVA)"><span>%</span><input id="cf-iva" type="number" step="0.01" style="flex:1;min-width:0" value="' + esc(m('iva') == null ? '' : m('iva')) + '"></div></div>' + inp('cf-total','Total *', m('total'), ' type="number" step="0.01"') + '</div>'
     + '<div class="frow c4" id="cf-tc-row"' + (usd ? '' : ' hidden') + '>' + inp('cf-tc','TC (UYU por USD)', c.tc, ' type="number" step="0.001" min="0" placeholder="vacío = pendiente"')
     +   '<div class="field" style="grid-column:span 3"><label>&nbsp;</label><div class="muted" style="font-size:11.5px;padding-top:8px">Notas de crédito en negativo. El TC se puede completar después desde la tabla.</div></div></div>'
     + '<div class="frow c3">' + inp('cf-est','Estado de pago', c.estado_pago, ' list="dl-est"') + inp('cf-cta','Cuenta', c.cuenta, ' list="dl-cta" placeholder="Ej. Santander USD"') + inp('cf-fpago','Fecha de pago', c.fecha_pago, ' type="date"') + '</div>'
@@ -1180,12 +1180,24 @@ function cuyForm(id, preset){
     if (c.proveedor_cod || c.proveedor) { const p = cuyProvBuscar(c.proveedor_cod || c.proveedor); hint.innerHTML = p ? '✓ ' + esc(p.codigo) + ' · ' + esc(p.nombre) : '<span class="warn">No está en el diccionario de proveedores (solapa Proveedores)</span>'; }
   }
   $('cf-mon').addEventListener('change', () => { $('cf-tc-row').hidden = $('cf-mon').value !== 'USD'; });
-  // Si cargás Neto e IVA, el Total se completa solo (mientras no lo hayas escrito a mano)
-  let totalAMano = $('cf-total').value !== '';
-  $('cf-total').addEventListener('input', () => { totalAMano = $('cf-total').value !== ''; });
-  const autoTotal = () => { if (totalAMano) return; const n = parseFloat($('cf-neto').value), i = parseFloat($('cf-iva').value);
-    if (!isNaN(n) || !isNaN(i)) $('cf-total').value = (Math.round(((isNaN(n) ? 0 : n) + (isNaN(i) ? 0 : i)) * 100) / 100).toFixed(2); };
-  $('cf-neto').addEventListener('input', autoTotal); $('cf-iva').addEventListener('input', autoTotal);
+  // Neto · % IVA · IVA · Total se completan entre sí (22 % por defecto, modificable). Lo que escribiste a mano
+  // no se pisa: si cargás el Neto, calcula IVA y Total; si cargás solo el Total, calcula Neto e IVA; si
+  // corregís el IVA (redondeo de la factura), ajusta el Total (o el Neto, si el Total lo escribiste vos).
+  const aMano = { neto: $('cf-neto').value !== '', iva: $('cf-iva').value !== '', total: $('cf-total').value !== '' };
+  const vNum = i => { const v = parseFloat($(i).value); return isNaN(v) ? null : v; }, put = (i, v) => { $(i).value = v == null ? '' : r2(v).toFixed(2); };
+  const pct = () => { const v = vNum('cf-piva'); return v == null ? 0 : v / 100; };
+  const recalc = origen => {
+    const n = vNum('cf-neto'), i = vNum('cf-iva'), t = vNum('cf-total');
+    if (aMano.neto && n != null) {                                        // manda el Neto
+      if (!aMano.iva || origen === 'piva') { aMano.iva = false; put('cf-iva', n * pct()); }
+      if (!aMano.total) put('cf-total', n + (vNum('cf-iva') || 0));
+    } else if (aMano.total && t != null) {                                // manda el Total
+      if (aMano.iva && origen !== 'piva' && i != null) put('cf-neto', t - i);
+      else { aMano.iva = false; const nn = r2(t / (1 + pct())); put('cf-neto', nn); put('cf-iva', t - nn); }
+    }
+  };
+  [['cf-neto','neto'],['cf-iva','iva'],['cf-total','total']].forEach(([id, k]) => $(id).addEventListener('input', () => { aMano[k] = $(id).value !== ''; recalc(k); }));
+  $('cf-piva').addEventListener('input', () => recalc('piva'));
   // Vista previa del asiento con lo que está escrito en el formulario (se actualiza al tipear)
   const imputacion = () => {
     const usd = $('cf-mon').value === 'USD', n = i => $(i).value === '' ? null : +$(i).value, tot = n('cf-total');
@@ -1204,7 +1216,7 @@ function cuyForm(id, preset){
       + '<table class="grid"><thead><tr><th>Cuenta</th><th>Debe</th><th>Haber</th></tr></thead><tbody>' + filas + '</tbody></table>'
       + '<div class="muted" style="margin-top:6px">Asiento en ' + (a.mon === 'USD' ? 'DOL' + (a.cot ? ' · cotización ' + fmtTC(a.cot.v) : '') : 'PES (ARS)') + '. Al pagarse: Debe ' + cta(cuyClaveContra(t)) + ' / Haber ' + (pk && pk.codigo ? '<b>' + esc(pk.codigo) + '</b> ' + esc(pk.nombre || cuentaPago) : esc(cuentaPago || 'la cuenta de pago')) + '.</div>';
   };
-  ['cf-fecha','cf-mon','cf-neto','cf-iva','cf-total','cf-tc','cf-rubro','cf-proy','cf-cgasto','cf-ccontra','cf-cta','cf-prov','cf-cod','cf-serie'].forEach(i => { $(i).addEventListener('input', imputacion); $(i).addEventListener('change', imputacion); });
+  ['cf-fecha','cf-mon','cf-neto','cf-piva','cf-iva','cf-total','cf-tc','cf-rubro','cf-proy','cf-cgasto','cf-ccontra','cf-cta','cf-prov','cf-cod','cf-serie'].forEach(i => { $(i).addEventListener('input', imputacion); $(i).addEventListener('change', imputacion); });
   imputacion();
   $('cf-ok').addEventListener('click', () => cuyGuardar(r ? r.id : null));
 }
