@@ -929,7 +929,7 @@ async function cargarInforme(inf){
    una factura anulada + su N/C con el mismo TC netean a 0.
    ========================================================================== */
 const CUY_T = 'adminfin_contabilidad_uy';
-const CUY = { lista:[], cargado:false, movs:[], plan:{}, movErr:'', tab:'comp', asTab:'fac',
+const CUY = { lista:[], cargado:false, movs:[], plan:{}, provs:[], provErr:'', movErr:'', tab:'comp', asTab:'fac',
               ctaSel:{ banco:'Santander USD', efectivo:'Efectivo pesos' }, sel:{ fac:new Set(), mov:new Set() },
               dic:{ cuentas:[], eerr:[] }, dicErr:'', cots:[], cierres:{}, cotErr:'', apl:[] };
 // Rubros de la hoja "Listas" del Excel CONTABILIDAD_UY_AVANCE_ORIENTAL (sugerencias; se puede escribir otro)
@@ -968,6 +968,9 @@ async function cuyCargar(){
     // Aplicaciones pago ↔ factura (pagos parciales): sql/2026-10_contabilidad_uy_aplicaciones.sql
     if (!CUY.movErr) { try { CUY.apl = await selTodo(CUY_APL_T, '*', 'id'); } catch (e) { CUY.movErr = 'aplicaciones: ' + (e.message || e) + ' — falta correr sql/2026-10_contabilidad_uy_aplicaciones.sql'; } }
     await Promise.all([cuyCargarDic(), cuyCargarCot()]);
+    // Diccionario de proveedores UY (sql/2026-10_contabilidad_uy_proveedores.sql): opcional
+    try { CUY.provs = (await selTodo(CUY_PROV_T, '*', null)).sort((a,b) => String(a.codigo).localeCompare(String(b.codigo))); CUY.provErr = ''; }
+    catch (e) { CUY.provs = []; CUY.provErr = e.message || String(e); }
     CUY.cargado = true;
   } catch (error) {
     if (VISTA !== 'cuy') return;
@@ -1131,7 +1134,7 @@ function cuyForm(id, preset){
   const body =
       '<div class="frow c3">' + inp('cf-fecha','Fecha *', c.fecha, ' type="date"') + inp('cf-per','Período (AAAAMM)', c.periodo, ' inputmode="numeric" placeholder="202610"')
     +   inp('cf-tipo','Tipo de CFE', c.tipo_cfe, ' list="dl-tipo"') + '</div>'
-    + '<div class="frow c3">' + inp('cf-prov','Proveedor *', c.proveedor, ' list="dl-prov"') + inp('cf-cod','Código proveedor', c.proveedor_cod, ' placeholder="Ej. LASENS"') + inp('cf-rut','RUT emisor', c.rut_emisor) + '</div>'
+    + '<div class="frow c3">' + inp('cf-prov','Proveedor *', c.proveedor, ' list="dl-prov"') + inp('cf-cod','Código proveedor', c.proveedor_cod, ' placeholder="Ej. LASENS" list="dl-pcod"') + inp('cf-rut','RUT emisor', c.rut_emisor) + '</div>'
     + '<div class="frow c3">' + inp('cf-serie','Serie / N°', c.serie_numero, ' placeholder="Ej. A-34989"') + inp('cf-rubro','Rubro', c.rubro, ' list="dl-rubro"') + inp('cf-proy','Proyecto', c.proyecto, ' list="dl-proy" placeholder="Ej. PL0090"') + '</div>'
     + '<div class="frow">' + inp('cf-conc','Concepto', c.concepto) + '</div>'
     + '<div class="frow c4"><div class="field"><label>Moneda de la factura *</label><select id="cf-mon"><option value="USD"' + (usd ? ' selected' : '') + '>USD (dólares)</option><option value="UYU"' + (!usd ? ' selected' : '') + '>UYU (pesos)</option></select></div>'
@@ -1142,7 +1145,7 @@ function cuyForm(id, preset){
     + '<div class="frow c3">' + inp('cf-rel','Doc. relacionado', c.doc_relacionado, ' placeholder="Serie que anula / anulada por"')
     +   '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink)"><input type="checkbox" id="cf-anul"' + (c.anulada ? ' checked' : '') + ' style="width:auto"> Anulada</label></div><div></div></div>'
     + '<div class="frow"><div class="field"><label>Observaciones</label><textarea id="cf-obs" rows="2" placeholder="Algo a revisar (queda la fila en amarillo)">' + esc(c.observaciones || '') + '</textarea></div></div>'
-    + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.lista.map(x => x.proveedor)) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
+    + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.provs.map(p => p.nombre).concat(CUY.lista.map(x => x.proveedor))) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
     + dl('dl-proy', CUY.lista.map(x => x.proyecto)) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', CUY_CTAS.map(x => x.n).concat(CUY.lista.map(x => x.cuenta)))
     + '<div class="box"><h4>Imputación contable</h4>'
     +   '<div class="frow c2">' + inp('cf-cgasto','Cuenta contable del gasto (Tango) *', c.cuenta_gasto, ' list="dl-cf-cta"') + inp('cf-ccontra','Contrapartida (Tango) — opcional', c.cuenta_contra, ' list="dl-cf-cta"') + '</div>'
@@ -1153,6 +1156,20 @@ function cuyForm(id, preset){
     '<button class="btn ghost" id="cf-cerrar">Cancelar</button><button class="btn" id="cf-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i);
   $('cf-cerrar').addEventListener('click', cerrarModal);
+  // Diccionario de proveedores: nombre, código o RUT completan los demás (y lo habitual si está vacío)
+  if (CUY.provs.length) {
+    const box = document.createElement('datalist'); box.id = 'dl-pcod'; box.innerHTML = CUY.provs.map(p => '<option value="' + esc(p.codigo) + '">' + esc(p.nombre) + '</option>').join(''); $('cf-cod').after(box);
+    const hint = document.createElement('div'); hint.className = 'muted'; hint.style.cssText = 'font-size:11.5px;margin-top:3px'; $('cf-cod').after(hint);
+    const llenar = (src) => { const p = cuyProvBuscar($(src).value); hint.innerHTML = '';
+      if (!p) { if ($(src).value.trim()) hint.innerHTML = '<span class="warn">No está en el diccionario de proveedores (solapa Proveedores)</span>'; return; }
+      $('cf-prov').value = p.nombre; $('cf-cod').value = p.codigo; if (p.rut) $('cf-rut').value = p.rut;
+      if (p.rubro && !$('cf-rubro').value) $('cf-rubro').value = p.rubro; if (p.proyecto && !$('cf-proy').value) $('cf-proy').value = p.proyecto;
+      if (p.cuenta_contable && $('cf-cgasto') && !$('cf-cgasto').value) { $('cf-cgasto').value = p.cuenta_contable; $('cf-cgasto').dispatchEvent(new Event('input')); }
+      if (!r && p.moneda && $('cf-mon')) { const mv = /usd/i.test(p.moneda) ? 'USD' : 'UYU'; if ([...$('cf-mon').options].some(o => o.value === mv)) { $('cf-mon').value = mv; $('cf-mon').dispatchEvent(new Event('change')); } }
+      hint.textContent = '✓ ' + p.codigo + ' · ' + p.nombre; };
+    ['cf-prov', 'cf-cod', 'cf-rut'].forEach(i => $(i).addEventListener('change', () => llenar(i)));
+    if (c.proveedor_cod || c.proveedor) { const p = cuyProvBuscar(c.proveedor_cod || c.proveedor); hint.innerHTML = p ? '✓ ' + esc(p.codigo) + ' · ' + esc(p.nombre) : '<span class="warn">No está en el diccionario de proveedores (solapa Proveedores)</span>'; }
+  }
   $('cf-mon').addEventListener('change', () => { $('cf-tc-row').hidden = $('cf-mon').value !== 'USD'; });
   // Si cargás Neto e IVA, el Total se completa solo (mientras no lo hayas escrito a mano)
   let totalAMano = $('cf-total').value !== '';
@@ -1491,7 +1508,7 @@ function cuyMovsDe(cn){
 const cuySortMovs = () => CUY.movs.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
 
 /* ---------- Pestañas de Contabilidad UY ---------- */
-const CUY_TABS = [['comp','Comprobantes'], ['banco','Conciliación bancos'], ['efectivo','Efectivo'], ['asientos','Asientos'], ['cot','Cotizaciones'], ['plan','Plan de cuentas']];
+const CUY_TABS = [['comp','Comprobantes'], ['banco','Conciliación bancos'], ['efectivo','Efectivo'], ['asientos','Asientos'], ['cot','Cotizaciones'], ['prov','Proveedores'], ['plan','Plan de cuentas']];
 function cuyTabs(){
   return '<div class="mtabs" style="margin:4px 0 14px">' + CUY_TABS.map(([id,l]) => '<button class="mtab' + (CUY.tab === id ? ' active' : '') + '" data-cuytab="' + id + '">' + l + '</button>').join('') + '</div>';
 }
@@ -1519,6 +1536,7 @@ function cuyRender0(){
   if (CUY.tab === 'banco' || CUY.tab === 'efectivo') return cuyRenderConc(CUY.tab);
   if (CUY.tab === 'asientos') return cuyRenderAsientos();
   if (CUY.tab === 'cot') return cuyRenderCot();
+  if (CUY.tab === 'prov') return cuyRenderProv();
   return cuyRenderPlan();
 }
 
@@ -2731,6 +2749,119 @@ function cuyPlanClaves(){
   CUY.movs.filter(m => m.tipo !== 'saldo_inicial').forEach(m => { const c = cuyContraMov(m); if (c !== 'PROVEEDORES' && c !== 'CAMBIO' && !c.startsWith('COD:')) add(c, 'Gasto / contrapartida', c.slice(7), 1, true); });
   Object.keys(CUY.plan).forEach(c => { if (!k.has(c) && !c.startsWith('CONFIG:')) add(c, 'Otras (guardadas)', c); });
   return [...k.values()];
+}
+/* ---------- Proveedores de Uruguay (diccionario: sql/2026-10_contabilidad_uy_proveedores.sql) ----------
+   Código corto (el de Comprobantes), razón social, RUT, moneda, datos bancarios y la cuenta / rubro / proyecto que
+   suele llevar. Al cargar un comprobante, escribir el nombre, el código o el RUT completa lo demás. */
+const CUY_PROV_T = 'adminfin_cuy_proveedores';
+const cuyRutNorm = t => String(t == null ? '' : t).replace(/\.0+$/, '').replace(/\D/g, '');
+function cuyProvBuscar(txt){
+  const t = fold(String(txt || '').trim()), rut = cuyRutNorm(txt); if (!t) return null;
+  return CUY.provs.find(p => fold(p.codigo) === t) || CUY.provs.find(p => fold(p.nombre) === t)
+    || (rut.length >= 8 ? CUY.provs.find(p => cuyRutNorm(p.rut) === rut) : null) || null;
+}
+function cuyRenderProv(){
+  const ta = document.getElementById('topActions');
+  ta.innerHTML = SP.editar && !CUY.provErr ? '<button class="btn ghost" id="pv-imp">' + ICO.upload + 'Importar del Excel</button><button class="btn" id="pv-nuevo">' + ICO.plus + 'Nuevo proveedor</button>' : '';
+  if (CUY.provErr) { $main.innerHTML = cuyTabs() + '<div class="card"><div class="empty">No pude leer los proveedores: ' + esc(CUY.provErr) + '<br><span class="muted">Falta correr sql/2026-10_contabilidad_uy_proveedores.sql en Supabase.</span></div></div>'; cuyTabsEventos(); return; }
+  const usos = c => CUY.lista.filter(r => fold(r.proveedor_cod || '') === fold(c)).length;
+  // Comprobantes cuyo proveedor no está en el diccionario (o sin código): para dejarlo consistente
+  const fuera = CUY.lista.filter(r => !String(r.proveedor_cod || '').trim() || !CUY.provs.some(p => fold(p.codigo) === fold(r.proveedor_cod)));
+  const cols = [
+    { id:'cod', t:'Código', s:p => p.codigo, td:p => '<b>' + esc(p.codigo) + '</b>' },
+    { id:'nom', t:'Razón social', s:p => p.nombre || '', td:p => esc(p.nombre || '') },
+    { id:'rut', t:'RUT', s:p => p.rut || '', td:p => esc(p.rut || '—') },
+    { id:'mon', t:'Moneda', v:p => p.moneda || '(sin dato)', td:p => esc(p.moneda || '—') },
+    { id:'ban', t:'Banco', v:p => p.banco || '(sin banco)', td:p => esc(p.banco || '—') + (p.sucursal ? '<div class="muted">' + esc(p.sucursal) + '</div>' : '') },
+    { id:'cb', t:'Cuenta bancaria', td:p => esc(p.cuenta_bancaria || '—') },
+    { id:'cc', t:'Cuenta contable / rubro / proyecto', td:p => [p.cuenta_contable, p.rubro, p.proyecto].filter(Boolean).map(esc).join(' · ') || '<span class="muted">—</span>' },
+    { id:'n', t:'Comprobantes', s:p => usos(p.codigo), cls:'num', td:p => usos(p.codigo) || '<span class="muted">0</span>' },
+    { id:'acc', t:'', td:p => SP.editar ? '<div class="row-actions"><button class="iconbtn" title="Editar" data-pv-ed="' + esc(p.codigo) + '">' + ICO.edit + '</button><button class="iconbtn del" title="Eliminar" data-pv-del="' + esc(p.codigo) + '">' + ICO.del + '</button></div>' : '' },
+  ];
+  TABLAS.prov = { cols, base: () => CUY.provs };
+  const f = tablaFiltrar('prov', cols, CUY.provs, p => [p.codigo, p.nombre, p.rut, p.banco].join(' '));
+  $main.innerHTML = cuyTabs()
+    + '<div class="meta-bar">Diccionario de proveedores de Uruguay: al cargar un comprobante, el nombre, el código o el RUT completan lo demás. El código es el que va en los asientos (leyenda) y en Comprobantes → Código proveedor.</div>'
+    + (fuera.length ? '<div class="card" style="margin-bottom:16px">' + cardH('Comprobantes con proveedor fuera del diccionario (' + fuera.length + ')', 'Sin código, o con un código que no está acá. Agregá el proveedor o corregí el código en el comprobante.')
+        + '<div class="hist" style="max-height:200px;padding:0 14px 10px">' + fuera.map(r => '<div class="it">' + fmtFecha(r.fecha) + ' · ' + esc(r.proveedor || '') + ' · ' + esc(r.serie_numero || '') + ' · código: <b>' + esc(r.proveedor_cod || '(vacío)') + '</b>'
+          + (SP.editar ? ' <button class="btn ghost sm" data-pv-desde="' + esc(r.id) + '">Agregar al diccionario</button>' : '') + '</div>').join('') + '</div></div>' : '')
+    + '<div class="card">' + cardH('Proveedores (' + CUY.provs.length + ')', '')
+    + (CUY.provs.length ? tablaHerramientas('prov', 'Buscar código, razón social, RUT…') + tablaHtml('prov', cols, f) : '<div class="empty">Todavía no hay proveedores. Importalos del Excel (hoja DICCIONARIO) o cargalos con "Nuevo proveedor".</div>') + '</div>';
+  tablaEventos(); cuyTabsEventos();
+  const on = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
+  on('pv-nuevo', () => cuyProvForm(null)); on('pv-imp', cuyProvImportar);
+  $main.querySelectorAll('[data-pv-ed]').forEach(b => b.addEventListener('click', () => cuyProvForm(b.dataset.pvEd)));
+  $main.querySelectorAll('[data-pv-desde]').forEach(b => b.addEventListener('click', () => { const r = CUY.lista.find(x => x.id === b.dataset.pvDesde); if (!r) return;
+    cuyProvForm(null, { codigo: r.proveedor_cod || '', nombre: r.proveedor || '', rut: r.rut_emisor || '', moneda: cuyEsUSD(r) ? 'USD' : 'UY', cuenta_contable: r.cuenta_gasto || '', rubro: r.rubro || '', proyecto: r.proyecto || '' }); }));
+  $main.querySelectorAll('[data-pv-del]').forEach(b => b.addEventListener('click', async () => {
+    const c = b.dataset.pvDel; if (usos(c) && !confirm(c + ' tiene ' + usos(c) + ' comprobante(s). ¿Lo saco igual del diccionario? (los comprobantes no se tocan)')) return;
+    try { const { error } = await sb.from(CUY_PROV_T).delete().eq('codigo', c); if (error) throw error; CUY.provs = CUY.provs.filter(p => p.codigo !== c); toast('Proveedor eliminado'); cuyRender(); }
+    catch (e) { toast('No se pudo: ' + (e.message || e)); } }));
+}
+function cuyProvForm(cod, preset){
+  const p0 = cod ? CUY.provs.find(p => p.codigo === cod) : null, c = p0 || preset || {};
+  const inp = (i, l, v, x) => '<div class="field"><label>' + l + '</label><input id="' + i + '" value="' + esc(v == null ? '' : v) + '"' + (x || '') + '></div>';
+  abrirModal(p0 ? 'Editar proveedor · ' + p0.codigo : 'Nuevo proveedor',
+    '<div class="frow c3">' + inp('pv-cod', 'Código *', c.codigo, (p0 ? ' disabled' : '') + ' placeholder="Ej. LASENS"') + inp('pv-nom', 'Razón social *', c.nombre) + inp('pv-rut', 'RUT', c.rut) + '</div>'
+    + '<div class="frow c3">' + inp('pv-mon', 'Moneda habitual', c.moneda, ' list="dl-pv-mon" placeholder="USD / UY"') + inp('pv-ban', 'Banco', c.banco) + inp('pv-cb', 'Cuenta bancaria', c.cuenta_bancaria) + '</div>'
+    + '<div class="frow">' + inp('pv-suc', 'Sucursal / dirección', c.sucursal) + '</div>'
+    + '<div class="frow c3">' + inp('pv-cc', 'Cuenta contable habitual (Tango)', c.cuenta_contable, ' list="dl-pv-cta"') + inp('pv-rub', 'Rubro habitual', c.rubro, ' list="dl-pv-rub"') + inp('pv-proy', 'Proyecto habitual', c.proyecto, ' placeholder="Ej. PL0090"') + '</div>'
+    + '<div class="frow">' + inp('pv-obs', 'Observaciones', c.observaciones) + '</div>'
+    + '<datalist id="dl-pv-mon"><option value="USD"><option value="UY"></datalist><datalist id="dl-pv-rub">' + CUY_RUBROS.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'
+    + '<datalist id="dl-pv-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist><div class="err" id="pv-err"></div>',
+    '<button class="btn ghost" id="pv-no">Cancelar</button><button class="btn" id="pv-ok">Guardar</button>', 'wide');
+  const $ = i => document.getElementById(i), v = i => $(i).value.trim();
+  $('pv-no').addEventListener('click', cerrarModal);
+  $('pv-ok').addEventListener('click', async () => {
+    const codigo = (p0 ? p0.codigo : v('pv-cod')).toUpperCase(), err = $('pv-err');
+    if (!codigo || !v('pv-nom')) { err.textContent = 'Código y razón social son obligatorios.'; return; }
+    if (!p0 && CUY.provs.some(p => p.codigo === codigo)) { err.textContent = 'Ya existe el código ' + codigo + '.'; return; }
+    const rut = cuyRutNorm(v('pv-rut')); const otro = rut && CUY.provs.find(p => p.codigo !== codigo && cuyRutNorm(p.rut) === rut);
+    if (otro) { err.textContent = 'Ese RUT ya está cargado en ' + otro.codigo + '.'; return; }
+    const fila = { codigo, nombre: v('pv-nom'), rut: rut || null, moneda: v('pv-mon') || null, banco: v('pv-ban') || null, cuenta_bancaria: v('pv-cb') || null, sucursal: v('pv-suc') || null,
+      cuenta_contable: v('pv-cc') || null, rubro: v('pv-rub') || null, proyecto: v('pv-proy') || null, observaciones: v('pv-obs') || null };
+    try { const { data, error } = await sb.from(CUY_PROV_T).upsert(fila, { onConflict:'codigo' }).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso de edición.');
+      const k = CUY.provs.findIndex(p => p.codigo === codigo); if (k >= 0) CUY.provs[k] = data[0]; else CUY.provs.push(data[0]);
+      CUY.provs.sort((a,b) => a.codigo.localeCompare(b.codigo)); cerrarModal(); toast('Proveedor guardado'); cuyRender(); }
+    catch (e) { err.textContent = 'Error: ' + (e.message || e); }
+  });
+}
+// Importa la hoja DICCIONARIO del Excel de Contabilidad UY (PROVEEDOR · CODIGO · CUIT / RUT · BANCO · SUCURSAL · MONEDA · CUENTA)
+function cuyProvImportar(){
+  if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+  abrirModal('Importar proveedores',
+    '<p style="margin:0 0 10px;font-size:12.5px;color:#5f5c52">Subí el Excel con la hoja de proveedores (columnas PROVEEDOR, CODIGO, CUIT / RUT, BANCO, SUCURSAL, MONEDA, CUENTA). Se guarda por código: los que ya existen se actualizan.</p>'
+    + '<div class="field"><label>Archivo</label><input type="file" id="pi-file" accept=".xlsx,.xls"></div><div class="box" id="pi-prev"></div><div class="err" id="pi-err"></div>',
+    '<button class="btn ghost" id="pi-no">Cancelar</button><button class="btn" id="pi-ok" disabled>Importar</button>', 'wide');
+  const $ = i => document.getElementById(i); let filas = [];
+  $('pi-no').addEventListener('click', cerrarModal);
+  $('pi-file').addEventListener('change', async e => {
+    const f = e.target.files[0]; filas = []; $('pi-ok').disabled = true; $('pi-err').textContent = ''; if (!f) return;
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { type:'array' });
+      for (const n of wb.SheetNames) {
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, raw:true, defval:null });
+        const hi = rows.findIndex(r => r && r.some(x => fold(String(x || '')) === 'codigo') && r.some(x => fold(String(x || '')) === 'proveedor')); if (hi < 0) continue;
+        const H = rows[hi].map(x => fold(String(x || ''))), col = (...ks) => H.findIndex(h => ks.some(k => h === k || h.startsWith(k)));
+        const c = { nom: col('proveedor'), cod: col('codigo'), rut: col('cuit / rut', 'rut', 'cuit'), ban: col('banco'), suc: col('sucursal'), mon: col('moneda'), cta: col('cuenta') };
+        rows.slice(hi + 1).forEach(r => { const cod = String(r[c.cod] || '').trim().toUpperCase(), nom = String(r[c.nom] || '').trim(); if (!cod || !nom) return;
+          const g = k => c[k] >= 0 && r[c[k]] != null && String(r[c[k]]).trim() !== '' ? String(r[c[k]]).trim().replace(/\.0+$/, '') : null, rut = cuyRutNorm(g('rut'));
+          filas.push({ codigo: cod, nombre: nom, rut: rut && +rut ? rut : null, banco: g('ban'), sucursal: g('suc'), moneda: g('mon'), cuenta_bancaria: g('cta') }); });
+        if (filas.length) break;
+      }
+      if (!filas.length) { $('pi-err').textContent = 'No encontré una hoja con columnas PROVEEDOR y CODIGO.'; return; }
+      const nuevos = filas.filter(x => !CUY.provs.some(p => p.codigo === x.codigo)).length;
+      $('pi-prev').innerHTML = filas.length + ' proveedores (' + nuevos + ' nuevos, ' + (filas.length - nuevos) + ' se actualizan): ' + filas.map(x => '<b>' + esc(x.codigo) + '</b>').join(', ');
+      $('pi-ok').disabled = false;
+    } catch (ex) { $('pi-err').textContent = 'No pude leer el archivo: ' + (ex.message || ex); }
+  });
+  $('pi-ok').addEventListener('click', async () => {
+    $('pi-ok').disabled = true;
+    try { const { data, error } = await sb.from(CUY_PROV_T).upsert(filas, { onConflict:'codigo' }).select(); if (error) throw error;
+      (data || []).forEach(d => { const k = CUY.provs.findIndex(p => p.codigo === d.codigo); if (k >= 0) CUY.provs[k] = d; else CUY.provs.push(d); });
+      CUY.provs.sort((a,b) => a.codigo.localeCompare(b.codigo)); cerrarModal(); toast(filas.length + ' proveedores importados'); cuyRender(); }
+    catch (e) { $('pi-err').textContent = 'Error: ' + (e.message || e); $('pi-ok').disabled = false; }
+  });
 }
 function cuyRenderPlan(){
   document.getElementById('topActions').innerHTML = '';
