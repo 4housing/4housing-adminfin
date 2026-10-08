@@ -15,7 +15,10 @@ Solapas:
   Cotizaciones (ARS/USD BNA divisa y UYU/USD por día) · Plan de cuentas (mismo plan Tango que Argentina, con buscador
   del diccionario de Compras). Conciliación en la moneda del banco (UYU / USD); asientos en Tango: USD → DOL con
   cotización ARS/USD, UYU → PES pasado a ARS por el dólar, con diferencia de cambio. Cierres mensuales por cuenta.
+  Asientos en Tango en DOL (Tango aplica su cotización); a fin de mes, Asientos → Cierre de mes arma el ajuste por
+  diferencia de cambio (DOL para lo que está en pesos uruguayos, PES para el peso argentino; el IVA no se ajusta).
   SQL (en orden): `sql/2026-10_contabilidad_uy_conciliacion.sql`, `sql/2026-10_contabilidad_uy_diccionario.sql`,
-  `sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql`.
+  `sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql`, `_aplicaciones`, `_usd_oficial`, `_contrapartida`,
+  `_imputacion_factura`, `_usd_billete`, `_ajuste_cierre` (todos `sql/2026-10_contabilidad_uy_*.sql`).
 Diseño: mismo sistema visual que `4housing-compras` y `4housing-eerr` (paleta oliva,
 Archivo/Quicksand, sidebar oscuro, cards, tablas `.grid`, badges y modales).
