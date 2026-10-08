@@ -981,10 +981,19 @@ async function cuyCargar(){
   if (VISTA === 'cuy') cuyRender();
 }
 
+// Código de proveedor del comprobante; si no lo tiene, el del diccionario por RUT / nombre (sug)
+function cuyCodProv(r){
+  const c = String(r.proveedor_cod || '').trim();
+  if (c) return { cod: c, dic: (CUY.provs || []).some(p => fold(p.codigo) === fold(c)) };
+  const p = cuyProvBuscar(r.rut_emisor) || cuyProvBuscar(r.proveedor);
+  return p ? { cod: p.codigo, sug: true } : { cod: '' };
+}
 function cuyCols(){
   return [
     { id:'fecha', t:'Fecha', fecha:r => r.fecha, td:r => '<span style="white-space:nowrap">' + fmtFecha(r.fecha) + '</span>' },
     { id:'per', t:'Período', v:r => fmtPeriodo(r.periodo) || '(sin período)', td:r => esc(fmtPeriodo(r.periodo) || '—') },
+    { id:'pcod', t:'Código', v:r => cuyCodProv(r).cod || '(sin código)', td:r => { const c = cuyCodProv(r);
+      return !c.cod ? '<span class="warn">—</span>' : c.dic ? '<b style="white-space:nowrap">' + esc(c.cod) + '</b>' : '<span style="white-space:nowrap" class="' + (c.sug ? 'muted' : 'warn') + '" title="' + (c.sug ? 'El comprobante no tiene código: es el del diccionario según el RUT / nombre' : 'Código que no está en el diccionario de proveedores') + '">' + esc(c.cod) + (c.sug ? ' (dic.)' : ' ⚠') + '</span>'; } },
     { id:'prov', t:'Proveedor', v:r => r.proveedor || '(sin proveedor)', td:r => '<strong>' + esc(r.proveedor || '') + '</strong>' + (r.rut_emisor ? '<div class="muted">RUT ' + esc(r.rut_emisor) + '</div>' : '') },
     { id:'tipo', t:'Tipo', v:r => r.tipo_cfe || '(sin tipo)', td:r => esc(r.tipo_cfe || '') },
     { id:'serie', t:'Serie / N°', s:r => r.serie_numero || '', td:r => '<strong style="white-space:nowrap">' + esc(r.serie_numero || '—') + '</strong>' },
@@ -1019,7 +1028,7 @@ function cuyCols(){
         + '<button class="iconbtn del" title="Eliminar" data-cuy-del="' + esc(r.id) + '">' + ICO.del + '</button></div>' : '' },
   ];
 }
-const cuyTexto = r => [r.proveedor, r.rut_emisor, r.proveedor_cod, r.serie_numero, r.concepto, r.proyecto, r.rubro, r.cuenta, r.doc_relacionado, r.observaciones, r.tipo_cfe].join(' ');
+const cuyTexto = r => [r.proveedor, r.rut_emisor, r.proveedor_cod || cuyCodProv(r).cod, r.serie_numero, r.concepto, r.proyecto, r.rubro, r.cuenta, r.doc_relacionado, r.observaciones, r.tipo_cfe].join(' ');
 function cuyFiltradas(){ const cols = cuyCols(); TABLAS.cuy = { cols, base:() => CUY.lista }; return { cols, filas: tablaFiltrar('cuy', cols, CUY.lista, cuyTexto) }; }
 
 function cuyRenderComp(){
