@@ -1540,7 +1540,15 @@ let CUY_VISTA = '';
 function cuyRender(){
   const vista = [CUY.tab, CUY.asTab, CUY.ctaSel && JSON.stringify(CUY.ctaSel)].join('|'), misma = vista === CUY_VISTA;
   const y = window.scrollY, x = window.scrollX, tablas = misma ? [...$main.querySelectorAll('.tbl-hscroll')].map(t => [t.scrollTop, t.scrollLeft]) : [];
-  CUY_VISTA = vista; cuyRender0();
+  CUY_VISTA = vista;
+  try { cuyRender0(); }
+  catch (e) {   // que un dato raro no deje trabada la pantalla: se ve el error y se puede cambiar de solapa
+    console.error(e);
+    $main.innerHTML = cuyTabs() + (CUY.tab === 'asientos' ? cuyAsSub() : '') + '<div class="card"><div class="empty"><b>No pude mostrar esta pantalla.</b><br>Error: ' + esc(e && e.message || String(e))
+      + '<br><span class="muted">Mandale una captura de este mensaje a quien mantiene la app. Mientras tanto podés usar las otras solapas.</span></div></div>';
+    cuyTabsEventos(); if (CUY.tab === 'asientos') cuyAsSubEventos();
+    return;
+  }
   if (!misma) return;
   $main.querySelectorAll('.tbl-hscroll').forEach((t, i) => { if (tablas[i]) { t.scrollTop = tablas[i][0]; t.scrollLeft = tablas[i][1]; } });
   window.scrollTo(x, y);
@@ -2471,7 +2479,7 @@ function cuyRenderAsientos(){
     if (a.falta.length) return '<span class="warn" title="Cargala en Cotizaciones">⚠ falta ' + esc([...new Set(a.falta)].join(', ')) + '</span>';
     const l = fac ? a.lineas.find(y => y.clave === 'PROVEEDORES') : a.lineas.find(y => y.clave.startsWith('CUENTA:')), d = a.lineas.find(y => y.clave.startsWith('DIF_CAMBIO'));
     const b = cuyBilleteDia(String(x.fecha || ''));
-    return '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' + '<div class="muted">' + (b ? 'TC ' + fmtTC(b.v) + (b.fecha !== x.fecha ? ' (del ' + fmtFecha(b.fecha) + ')' : '') : '<span class="warn">sin TC del día</span>') + '</div>'
+    return (l && l.monto != null ? '<b>' + fmtMon(Math.abs(l.monto), a.mon) + '</b>' : '<span class="muted">—</span>') + '<div class="muted">' + (b ? 'TC ' + fmtTC(b.v) + (b.fecha !== x.fecha ? ' (del ' + fmtFecha(b.fecha) + ')' : '') : '<span class="warn">sin TC del día</span>') + '</div>'
       + (d ? '<div class="muted">dif. cambio ' + fmtMon(d.monto, a.mon) + '</div>' : ''); } };
   const chk = x => '<input type="checkbox" data-asel="' + esc(x.id) + '"' + (sel.has(x.id) ? ' checked' : '') + '>';
   const inpAs = x => SP.editar ? '<input class="tc-in" style="width:84px;text-align:left" data-asnum="' + esc(x.id) + '" value="' + esc(x.asiento_num || '') + '" placeholder="N° asiento" title="N° de asiento en Tango, una vez importado y revisado. Enter para guardar.">' : esc(x.asiento_num || '—');
@@ -2501,7 +2509,7 @@ function cuyRenderAsientos(){
     { id:'imp', t:'Importe', s:m => +m.importe, cls:'num', td:m => fmtMon(+m.importe, cuyCta(m.cuenta).mon) },
     { id:'contra', t:'Contrapartida', v:m => { const k = cuyContraMov(m); return k === 'CAMBIO' ? 'Cambio de moneda' : k.startsWith('COD:') ? 'Cargada en el movimiento' : k; },
       td:m => { const k = cuyContraMov(m);
-        if (k === 'CAMBIO') { const e = CUY_ESP[m.id]; return '↔ ' + esc(e.cuenta) + ' ' + fmtMon(+e.importe, cuyCta(e.cuenta).mon) + '<div class="muted">un solo asiento por el cambio</div>'; }
+        if (k === 'CAMBIO') { const e = CUY_ESP[m.id]; if (!e) return 'Cambio de moneda'; return '↔ ' + esc(e.cuenta) + ' ' + fmtMon(+e.importe, cuyCta(e.cuenta).mon) + '<div class="muted">un solo asiento por el cambio</div>'; }
         if (k.startsWith('COD:')) { const p = cuyPlan(k); return esc(p.codigo) + (p.nombre ? ' · ' + esc(p.nombre) : '') + '<div class="muted">cargada en el movimiento</div>'; }
         return esc(k); } },
     colTango, colCod, colAs, colNum ];
