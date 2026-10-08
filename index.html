@@ -1702,7 +1702,7 @@ function cuyCierresDe(cn, movs){
     saldo = r2(ini + ing + egr);
     const c = CUY.cierres[cn + '|' + mes], ext = c ? cuyNum(c.saldo_extracto) : null;
     if (usd != null) delMes.forEach(m => { const u = cuyMovUsdEq(m); usd = u == null ? null : r2(usd + u); });
-    const ajM = (CUY.ajustes || {})[cn + '|' + mes], usdAntesAj = usd;   // ajuste de cierre (DOL) cargado en Tango
+    const ajM = cuyEsEfectivo(cn) ? null : (CUY.ajustes || {})[cn + '|' + mes], usdAntesAj = usd;   // ajuste de cierre (DOL) cargado en Tango
     if (usd != null && ajM && cuyNum(ajM.ajuste_usd) != null) usd = r2(usd + +ajM.ajuste_usd);
     // Valor real del saldo al cierre en US$: saldo del extracto ÷ UYU/USD del último día hábil del mes (la cotización
     // "anterior" al 1° del mes siguiente). La diferencia con lo registrado es diferencia de cambio por tenencia.
@@ -2373,6 +2373,7 @@ function cuyCierreCalc(mes, tc, arsIn){
   const bil = f => { const b = cuyBilleteDia(String(f || '').slice(0,10)); return b ? b.v : null; };
   const filas = [];
   CUY_CTAS.forEach(c => {
+    if (cuyEsEfectivo(c.n)) return;   // cajas: lo pagado en efectivo queda al TC registrado, sin ajuste (decisión de Micaela, oct 2026)
     const movs = cuyMovsDe(c.n).filter(m => String(m.fecha) <= fin); if (!movs.length) return;
     const saldo = r2(movs.reduce((a,m) => a + (+m.importe || 0), 0)), cie = CUY.cierres[c.n + '|' + mes], ext = cie ? cuyNum(cie.saldo_extracto) : null;
     const prev = cuyAjPrevios(c.n, mes); let usd = prev.usd, arsEst = prev.ars, falta = false;
@@ -2438,7 +2439,7 @@ function cuyRenderCierre(){
   const asTxt = a => '<div style="margin-top:8px"><b>' + esc(a.concepto) + '</b> · TC ' + fmtTC(tmp.tc || 0) + '<table class="grid" style="margin-top:4px"><tbody>'
     + a.lineas.map(l => { const p = cuyPlan(l.clave); return '<tr><td>' + esc(p.codigo || '') + ' · ' + esc(p.nombre || l.clave) + '</td><td class="num">' + (l.monto > 0 ? fmtMon(l.monto, a.mon) : '') + '</td><td class="num">' + (l.monto < 0 ? fmtMon(-l.monto, a.mon) : '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
   $main.innerHTML = cuyTabs() + cuyAsSub()
-    + '<div class="meta-bar">Ajuste de fin de mes de las cuentas en moneda (bancos, cajas y Proveedores). <b>1) Asiento en DOL</b>: lo que cambió de valor en dólares lo que está en pesos uruguayos (saldo en $U ÷ BCU del último día hábil). <b>2) Asiento en PES</b>: cada cuenta a saldo US$ × TC de cierre, contra su saldo en AR$ en Tango. Contrapartida 42000002 / 58000002. El <b>IVA crédito fiscal no se ajusta</b> (queda en pesos uruguayos).'
+    + '<div class="meta-bar">Ajuste de fin de mes de los <b>bancos y Proveedores</b> (las cajas no se ajustan: lo pagado en efectivo queda al TC registrado). <b>1) Asiento en DOL</b>: lo que cambió de valor en dólares lo que está en pesos uruguayos (saldo en $U ÷ BCU del último día hábil). <b>2) Asiento en PES</b>: cada cuenta a saldo US$ × TC de cierre, contra su saldo en AR$ en Tango. Contrapartida 42000002 / 58000002. El <b>IVA crédito fiscal no se ajusta</b> (queda en pesos uruguayos).'
     + (CUY.ajErr ? '<br><span class="warn">No se puede guardar el cierre: falta correr sql/2026-10_contabilidad_uy_ajuste_cierre.sql (' + esc(CUY.ajErr) + ').</span>' : '') + '</div>'
     + '<div class="card">' + cardH('Cierre de ' + cuyMesTxt(mes), guardado.length ? 'Guardado: el saldo en US$ del mes siguiente ya parte del ajustado.' : 'Todavía sin guardar.')
     + '<div class="tools" style="flex-wrap:wrap;gap:8px"><span style="font-size:12px;color:var(--muted)">Mes</span><select class="tc-in" style="width:auto;text-align:left" id="ci-mes">' + meses.map(m => '<option value="' + m + '"' + (m === mes ? ' selected' : '') + '>' + esc(cuyMesTxt(m)) + '</option>').join('') + '</select>'
@@ -2464,7 +2465,11 @@ function cuyRenderCierre(){
     const filas = c.filas.map(f => ({ mes, cuenta: f.cuenta, codigo: f.codigo, usd_registrado: f.usdReg, usd_real: f.usdReal, ars_tango: f.arsTango, tc_cierre: tmp.tc, uyu_usd_cierre: c.bcu,
       ajuste_usd: f.ajUsd, ajuste_ars: f.ajArs, asiento_dol: tmp.dol || null, asiento_pes: tmp.pes || null }));
     try { const { data, error } = await sb.from(CUY_AJ_T).upsert(filas, { onConflict:'mes,cuenta' }).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso de edición.');
-      data.forEach(a => { CUY.ajustes[a.cuenta + '|' + a.mes] = a; }); toast('Cierre de ' + cuyMesTxt(mes) + ' guardado'); cuyRender(); }
+      data.forEach(a => { CUY.ajustes[a.cuenta + '|' + a.mes] = a; });
+      // si quedó guardado un ajuste de caja de antes (las cajas ya no se ajustan), se borra
+      const viejas = Object.values(CUY.ajustes).filter(a => a.mes === mes && cuyEsEfectivo(a.cuenta));
+      for (const a of viejas) { const { error: e2 } = await sb.from(CUY_AJ_T).delete().eq('mes', mes).eq('cuenta', a.cuenta); if (!e2) delete CUY.ajustes[a.cuenta + '|' + mes]; }
+      toast('Cierre de ' + cuyMesTxt(mes) + ' guardado'); cuyRender(); }
     catch (e) { toast('No se guardó: ' + (e.message || e)); }
   });
 }
