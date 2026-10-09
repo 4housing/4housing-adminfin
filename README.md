@@ -23,7 +23,8 @@ Solapas:
 - **Tareas** (menú lateral): quién asigna a quién, fecha, vencimiento, estado (pendiente / en curso / hecha), adjuntos y
   comentarios. Quien tiene tildado «Tareas · ver todas» ve todas; el resto, las que le asignaron o creó.
   SQL: `sql/2026-10_tareas.sql` (tablas, bucket privado `adminfin-tareas` y permisos) y después
-  `sql/2026-10_adminfin_secciones.sql`.
+  `sql/2026-10_adminfin_secciones.sql` y `sql/2026-10_tareas_responsable.sql` (responsable + transferir: el responsable no
+  cambia al transferir la tarea; queda un comentario automático por cada transferencia).
 - **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
   `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
   edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
