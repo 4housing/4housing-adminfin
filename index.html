@@ -351,7 +351,9 @@ const TAR_EST = { pendiente:'Pendiente', en_curso:'En curso', hecha:'Hecha' };
 const TAR_BADGE = { pendiente:'b-ambar', en_curso:'b-azul', hecha:'b-verde' };
 const tarNom = id => { const u = TAR.usuarios.find(x => x.id === id); return u ? (u.nombre || u.email) : (id === SP.uid ? 'Yo' : '—'); };
 const tarVencida = t => t.estado !== 'hecha' && t.vencimiento && String(t.vencimiento) < hoyISO();
-const tarPuedeEditar = t => TAR.sup || t.asignado_por === SP.uid;
+const tarResp = t => t.responsable || t.asignado_a;   // responsable: quien responde (no cambia al transferir)
+const tarPuedeEditar = t => TAR.sup || t.asignado_por === SP.uid || tarResp(t) === SP.uid;
+const tarPuedeTransferir = t => tarPuedeEditar(t) || t.asignado_a === SP.uid;
 async function tarCargar(){
   try {
     const [lista, com, adj, us, sup] = await Promise.all([selTodo(TAR_T, '*', 'id'), selTodo(TAR_COM_T, '*', 'id'), selTodo(TAR_ADJ_T, '*', 'id'),
@@ -367,14 +369,16 @@ function tarRender(){
   ta.innerHTML = SP.editar && !TAR.err ? '<button class="btn" id="tr-nueva">' + ICO.plus + 'Nueva tarea</button>' : '';
   if (TAR.err) { $main.innerHTML = '<div class="card"><div class="empty">No pude leer las tareas: ' + esc(TAR.err) + '<br><span class="muted">Falta correr sql/2026-10_tareas.sql en Supabase.</span></div></div>'; return; }
   const mias = TAR.lista.filter(t => t.asignado_a === SP.uid), creadas = TAR.lista.filter(t => t.asignado_por === SP.uid);
+  const resp = TAR.lista.filter(t => tarResp(t) === SP.uid && t.asignado_a !== SP.uid);   // soy responsable y la delegué
   const abiertas = xs => xs.filter(t => t.estado !== 'hecha');
-  const base = TAR.vista === 'mias' ? mias : TAR.vista === 'creadas' ? creadas : TAR.lista;
+  const base = TAR.vista === 'mias' ? mias : TAR.vista === 'creadas' ? creadas : TAR.vista === 'resp' ? resp : TAR.lista;
   const filas = base.filter(t => TAR.estado === 'todas' ? true : TAR.estado === 'hechas' ? t.estado === 'hecha' : t.estado !== 'hecha');
   const nCom = id => TAR.com.filter(c => c.tarea_id === id).length, nAdj = id => TAR.adj.filter(a => a.tarea_id === id).length;
   const cols = [
     { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? '<div class="muted" style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.descripcion) + '</div>' : '') },
     { id:'por', t:'Asignada por', v:t => tarNom(t.asignado_por), td:t => esc(tarNom(t.asignado_por)) },
     { id:'a', t:'Asignada a', v:t => tarNom(t.asignado_a), td:t => '<b>' + esc(tarNom(t.asignado_a)) + '</b>' },
+    { id:'resp', t:'Responsable', v:t => tarNom(tarResp(t)), td:t => tarResp(t) === t.asignado_a ? '<span class="muted">la misma</span>' : esc(tarNom(tarResp(t))) },
     { id:'fecha', t:'Fecha', fecha:t => t.fecha, td:t => fmtFecha(t.fecha) },
     { id:'vence', t:'Vence', fecha:t => t.vencimiento, td:t => t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtFecha(t.vencimiento) + '</b> · vencida</span>' : fmtFecha(t.vencimiento)) : '<span class="muted">—</span>' },
     { id:'est', t:'Estado', v:t => TAR_EST[t.estado] || t.estado, td:t => '<span class="badge ' + (tarVencida(t) ? 'b-rojo' : TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(TAR_EST[t.estado] || t.estado) + '</span>' },
@@ -383,16 +387,17 @@ function tarRender(){
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
   ];
   TABLAS.tar = { cols, base: () => filas };
-  const f = tablaFiltrar('tar', cols, filas, t => [t.titulo, t.descripcion, tarNom(t.asignado_por), tarNom(t.asignado_a)].join(' '));
+  const f = tablaFiltrar('tar', cols, filas, t => [t.titulo, t.descripcion, tarNom(t.asignado_por), tarNom(t.asignado_a), tarNom(tarResp(t))].join(' '));
   const kpi = (l, v, sub, warn) => '<div class="kpi"><div class="kpi-label">' + l + '</div><div class="kpi-value' + (warn ? ' warn' : '') + '">' + v + '</div><div class="kpi-sub">' + sub + '</div></div>';
   const btn = (id, l, n) => '<button class="mtab' + (TAR.vista === id ? ' active' : '') + '" data-tr-vista="' + id + '">' + l + ' (' + n + ')</button>';
   $main.innerHTML = '<div class="kpi-grid">'
     + kpi('Asignadas a mí', abiertas(mias).length, 'abiertas · ' + abiertas(mias).filter(tarVencida).length + ' vencidas', abiertas(mias).some(tarVencida))
     + kpi('Creadas por mí', abiertas(creadas).length, 'abiertas · ' + abiertas(creadas).filter(tarVencida).length + ' vencidas')
+    + kpi('Delegadas (soy responsable)', abiertas(resp).length, 'abiertas · ' + abiertas(resp).filter(tarVencida).length + ' vencidas', abiertas(resp).some(tarVencida))
     + (TAR.sup ? kpi('Todas', abiertas(TAR.lista).length, 'abiertas · ' + abiertas(TAR.lista).filter(tarVencida).length + ' vencidas', abiertas(TAR.lista).some(tarVencida)) : '')
     + '</div>'
-    + '<div class="mtabs" style="margin:4px 0 14px">' + btn('mias', 'Asignadas a mí', mias.length) + btn('creadas', 'Creadas por mí', creadas.length) + (TAR.sup ? btn('todas', 'Todas', TAR.lista.length) : '') + '</div>'
-    + '<div class="card">' + cardH('Tareas', TAR.sup ? 'Ves todas las tareas (supervisión).' : 'Ves las tareas que te asignaron y las que creaste.')
+    + '<div class="mtabs" style="margin:4px 0 14px">' + btn('mias', 'Asignadas a mí', mias.length) + btn('creadas', 'Creadas por mí', creadas.length) + btn('resp', 'Soy responsable', resp.length) + (TAR.sup ? btn('todas', 'Todas', TAR.lista.length) : '') + '</div>'
+    + '<div class="card">' + cardH('Tareas', TAR.sup ? 'Ves todas las tareas (supervisión).' : 'Ves las tareas que te asignaron, las que creaste y las que delegaste siendo responsable.')
     + '<div class="tools" style="padding-bottom:0"><span style="font-size:12px;color:var(--muted)">Mostrar</span><select class="tc-in" style="width:auto;text-align:left" id="tr-est">'
     + [['abiertas','Abiertas (pendientes y en curso)'], ['hechas','Hechas'], ['todas','Todas']].map(([k,l]) => '<option value="' + k + '"' + (TAR.estado === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>'
     + (filas.length ? tablaHerramientas('tar', 'Buscar título, descripción, persona…') + tablaHtml('tar', cols, f, '', t => tarVencida(t) ? 'revisar' : '') : '<div class="empty">No hay tareas para mostrar.</div>') + '</div>';
@@ -422,6 +427,7 @@ function tarForm(id){
     '<div class="frow">' + inp('tf-tit', 'Título *', c.titulo, ' placeholder="Ej. Cargar facturas de octubre"') + '</div>'
     + '<div class="frow c3"><div class="field"><label>Asignar a *</label><select id="tf-a"><option value="">Elegí…</option>' + tarOpcUsuarios(c.asignado_a) + '</select></div>'
     + inp('tf-fecha', 'Fecha', c.fecha, ' type="date"') + inp('tf-vence', 'Vencimiento', c.vencimiento, ' type="date"') + '</div>'
+    + (t0 ? '<div class="frow c3"><div class="field"><label>Responsable</label><select id="tf-resp">' + tarOpcUsuarios(tarResp(t0)) + '</select></div></div>' : '')
     + '<div class="frow"><div class="field"><label>Descripción</label><textarea id="tf-desc" rows="4" placeholder="Qué hay que hacer, links, datos…">' + esc(c.descripcion || '') + '</textarea></div></div>'
     + (t0 ? '' : '<div class="frow"><div class="field"><label>Adjuntos (opcional)</label><input type="file" id="tf-files" multiple></div></div>')
     + '<div class="err" id="tf-err"></div>',
@@ -432,7 +438,8 @@ function tarForm(id){
     const err = $('tf-err'); err.textContent = '';
     if (!v('tf-tit') || !v('tf-a')) { err.textContent = 'Título y "Asignar a" son obligatorios.'; return; }
     if (v('tf-vence') && v('tf-fecha') && v('tf-vence') < v('tf-fecha')) { err.textContent = 'El vencimiento es anterior a la fecha.'; return; }
-    const fila = { titulo: v('tf-tit'), asignado_a: v('tf-a'), fecha: v('tf-fecha') || hoyISO(), vencimiento: v('tf-vence') || null, descripcion: v('tf-desc') || null };
+    const fila = { titulo: v('tf-tit'), asignado_a: v('tf-a'), fecha: v('tf-fecha') || hoyISO(), vencimiento: v('tf-vence') || null, descripcion: v('tf-desc') || null,
+      responsable: t0 ? (v('tf-resp') || v('tf-a')) : v('tf-a') };   // al crear, el responsable es a quien se la asigna
     $('tf-ok').disabled = true;
     try {
       let t;
@@ -445,6 +452,27 @@ function tarForm(id){
     } catch (e) { err.textContent = 'Error: ' + (e.message || e); $('tf-ok').disabled = false; }
   });
 }
+// Transferir: cambia quién la hace; el responsable sigue siendo el mismo. Lo hace la base (adminfin_tarea_transferir),
+// que además deja el comentario automático "↪ X transfirió la tarea a Y".
+function tarTransferir(id){
+  const t = TAR.lista.find(x => x.id === id); if (!t) return;
+  abrirModal('Transferir · ' + t.titulo,
+    '<p style="margin:0 0 10px;font-size:12.5px;color:#5f5c52;line-height:1.5">La tarea pasa a la persona que elijas. <b>Responsable</b> sigue siendo <b>' + esc(tarNom(tarResp(t))) + '</b>, que la sigue viendo en "Soy responsable".'
+    + (t.asignado_a === SP.uid && tarResp(t) !== SP.uid && t.asignado_por !== SP.uid && !TAR.sup ? ' Como no sos el responsable ni quien la creó, después de transferirla <b>ya no la vas a ver</b>.' : '') + '</p>'
+    + '<div class="frow"><div class="field"><label>Transferir a *</label><select id="tt-a"><option value="">Elegí…</option>' + TAR.usuarios.filter(u => u.id !== t.asignado_a).map(u => '<option value="' + esc(u.id) + '">' + esc(u.nombre || u.email) + '</option>').join('') + '</select></div></div>'
+    + '<div class="frow"><div class="field"><label>Nota (opcional)</label><textarea id="tt-nota" rows="2" placeholder="Ej. te paso esto, cargalo hoy"></textarea></div></div><div class="err" id="tt-err"></div>',
+    '<button class="btn ghost" id="tt-no">Cancelar</button><button class="btn" id="tt-ok">Transferir</button>');
+  const $ = i => document.getElementById(i);
+  $('tt-no').addEventListener('click', () => tarDetalle(id));
+  $('tt-ok').addEventListener('click', async () => {
+    const a = $('tt-a').value; if (!a) { $('tt-err').textContent = 'Elegí a quién se la transferís.'; return; }
+    $('tt-ok').disabled = true;
+    const { error } = await sb.rpc('adminfin_tarea_transferir', { p_tarea: id, p_a: a, p_nota: $('tt-nota').value.trim() || null });
+    if (error) { $('tt-err').textContent = 'No se pudo: ' + (/adminfin_tarea_transferir|function/.test(error.message) ? 'falta correr sql/2026-10_tareas_responsable.sql' : error.message); $('tt-ok').disabled = false; return; }
+    toast('Tarea transferida a ' + tarNom(a)); TAR.cargado = false; await tarCargar();
+    if (TAR.lista.some(x => x.id === id)) tarDetalle(id); else cerrarModal();
+  });
+}
 function tarDetalle(id){
   const t = TAR.lista.find(x => x.id === id); if (!t) return;
   const edita = tarPuedeEditar(t), cambiaEstado = edita || t.asignado_a === SP.uid;
@@ -454,7 +482,7 @@ function tarDetalle(id){
   const kb = n => n == null ? '' : n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   abrirModal(t.titulo,
     '<div class="frow c3"><div><div class="muted" style="font-size:11px">ASIGNADA POR</div><b>' + esc(tarNom(t.asignado_por)) + '</b></div>'
-    + '<div><div class="muted" style="font-size:11px">ASIGNADA A</div><b>' + esc(tarNom(t.asignado_a)) + '</b></div>'
+    + '<div><div class="muted" style="font-size:11px">ASIGNADA A · RESPONSABLE</div><b>' + esc(tarNom(t.asignado_a)) + '</b>' + (tarResp(t) !== t.asignado_a ? ' <span class="muted">· responsable:</span> <b>' + esc(tarNom(tarResp(t))) + '</b>' : ' <span class="muted">(también responsable)</span>') + '</div>'
     + '<div><div class="muted" style="font-size:11px">FECHA · VENCE</div>' + fmtFecha(t.fecha) + ' · ' + (t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtFecha(t.vencimiento) + ' (vencida)</b></span>' : fmtFecha(t.vencimiento)) : '—') + '</div></div>'
     + '<div class="frow" style="margin-top:10px"><div class="field"><label>Estado</label>' + (cambiaEstado
         ? '<select id="td-est" style="max-width:220px">' + Object.entries(TAR_EST).map(([k,l]) => '<option value="' + k + '"' + (t.estado === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>'
@@ -468,10 +496,12 @@ function tarDetalle(id){
     + (coms.length ? '<div class="hist" style="max-height:260px">' + coms.map(c => '<div class="it" style="white-space:pre-wrap">' + esc(c.texto) + '<div class="muted" style="margin-top:2px">' + esc(tarNom(c.autor)) + ' · ' + cuandoT(c.creado_en) + '</div></div>').join('') + '</div>' : '<div class="muted" style="font-size:12.5px">Sin comentarios todavía.</div>')
     + '<div class="field" style="margin-top:8px"><textarea id="td-com" rows="2" placeholder="Escribí un comentario…"></textarea></div><button class="btn ghost sm" id="td-comentar">Comentar</button>'
     + '<div class="err" id="td-err"></div>',
-    (edita ? '<button class="btn ghost" id="td-del" style="margin-right:auto">Eliminar</button><button class="btn ghost" id="td-editar">Editar</button>' : '') + '<button class="btn" id="td-cerrar">Cerrar</button>', 'wide');
+    (edita ? '<button class="btn ghost" id="td-del" style="margin-right:auto">Eliminar</button><button class="btn ghost" id="td-editar">Editar</button>' : '')
+    + (tarPuedeTransferir(t) ? '<button class="btn ghost" id="td-transf">↪ Transferir</button>' : '') + '<button class="btn" id="td-cerrar">Cerrar</button>', 'wide');
   const $ = i => document.getElementById(i), err = m => { $('td-err').textContent = m; };
   $('td-cerrar').addEventListener('click', cerrarModal);
   if ($('td-editar')) $('td-editar').addEventListener('click', () => tarForm(id));
+  if ($('td-transf')) $('td-transf').addEventListener('click', () => tarTransferir(id));
   if ($('td-del')) $('td-del').addEventListener('click', async () => {
     if (!confirm('¿Eliminar la tarea "' + t.titulo + '" con sus comentarios y adjuntos?')) return;
     try { const paths = adjs.map(a => a.path); if (paths.length) await sb.storage.from(TAR_BUCKET).remove(paths);
