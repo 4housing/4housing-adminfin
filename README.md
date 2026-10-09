@@ -21,7 +21,11 @@ Solapas:
   `sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql`, `_aplicaciones`, `_usd_oficial`, `_contrapartida`,
   `_imputacion_factura`, `_usd_billete`, `_ajuste_cierre`, `_proveedores`, `_clientes` (todos `sql/2026-10_contabilidad_uy_*.sql`).
 - **Tareas** (menú lateral): quién asigna a quién, fecha, vencimiento, estado (pendiente / en curso / hecha), adjuntos y
-  comentarios. Los supervisores (tabla `adminfin_tareas_supervisores`) ven todas; el resto, las que le asignaron o creó.
-  SQL: `sql/2026-10_tareas.sql` (tablas, bucket privado `adminfin-tareas` y permisos).
+  comentarios. Quien tiene tildado «Tareas · ver todas» ve todas; el resto, las que le asignaron o creó.
+  SQL: `sql/2026-10_tareas.sql` (tablas, bucket privado `adminfin-tareas` y permisos) y después
+  `sql/2026-10_adminfin_secciones.sql`.
+- **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
+  `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
+  edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
 Diseño: mismo sistema visual que `4housing-compras` y `4housing-eerr` (paleta oliva,
 Archivo/Quicksand, sidebar oscuro, cards, tablas `.grid`, badges y modales).
