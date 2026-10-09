@@ -1637,7 +1637,11 @@ function cuyRenderConc(g){
           + (es ? '<div class="muted">↔ ' + esc(es.cuenta) + ' ' + fmtMon(+es.importe, cuyCta(es.cuenta).mon) + ' · TC ' + fmtTC(cuyTcCambio(m)) + '</div>' : '')
           + (cs.length ? '<div class="muted">' + cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); return c ? esc(c.serie_numero || c.id) + ' ' + fmtMon(cuyAplImporte(a), mon) + (cuyCompConc(c) === 'Pago parcial' ? ' (parcial)' : '') : ''; }).join(', ') + '</div>' : '')
           + (e === 'Diferencia' ? '<div class="muted" style="color:#b0584f">' + (isNaN(d) ? 'factura sin TC' : 'dif. ' + fmtMon(d, mon)) + '</div>' : ''); } },
-    { id:'as', t:'Asiento', v:m => m.tipo === 'saldo_inicial' ? 'No aplica' : (String(m.asiento_num || '').trim() ? 'Registrado' : 'Pendiente'), td:m => m.tipo === 'saldo_inicial' ? '<span class="muted">—</span>' : esc(m.asiento_num || 'pendiente') },
+    { id:'as', t:'Asiento', v:m => m.tipo === 'saldo_inicial' ? 'No aplica' : cuyMovEnFactura(m) ? 'En la factura' : (String(m.asiento_num || '').trim() ? 'Registrado' : 'Pendiente'),
+      td:m => { if (m.tipo === 'saldo_inicial') return '<span class="muted">—</span>';
+        // pagada en efectivo con la caja como contrapartida de la factura: no lleva asiento propio, va en el de la factura
+        if (cuyMovEnFactura(m)) { const ns = cuyCompDeMov(m.id).map(r => String(r.asiento_num || '').trim()); return '<span class="muted" title="No lleva asiento propio: la caja sale en el asiento de la factura">en la factura</span><div>' + (ns.every(Boolean) ? esc(ns.join(', ')) : '<span class="warn">factura sin N° de asiento</span>') + '</div>'; }
+        return esc(m.asiento_num || 'pendiente'); } },
     { id:'acc', t:'', td:m => SP.editar ? '<div class="row-actions">'
         + (cuyMovEstado(m) === 'Sin factura' ? '<button class="btn ghost sm" data-gbanc="' + esc(m.id) + '" title="Es una comisión / gasto del banco: no lleva factura. El respaldo es el extracto y genera su asiento de gasto bancario.">Es gasto bancario</button>' : '')
         + (+m.importe < 0 && m.tipo !== 'gasto_bancario' && m.tipo !== 'saldo_inicial' ? '<button class="btn ghost sm" data-vinc="' + esc(m.id) + '">Facturas</button>' : '')
@@ -1926,9 +1930,12 @@ async function cuyEfectivoAuto(r){
   if (CUY.movErr || !r) return '';
   const cta = cuyCta(r.cuenta);
   if (!cta || cta.g !== 'efectivo' || r.anulada || String(r.estado_pago || '').toUpperCase() !== 'PAGADO') return '';
-  const monto = cuyEnMoneda(r, cta.mon);
-  if (monto == null) return ' · ⚠ sin TC: no generé el movimiento de caja';
-  const fila = { cuenta: cta.n, fecha: r.fecha_pago || r.fecha, importe: -monto, tc: cuyNum(r.tc), concepto: cuyLey([r.proveedor, r.serie_numero, r.concepto]),
+  // Factura en pesos pagada desde una caja en dólares: se pasa a US$ con el TC de la factura o, si no tiene, el UYU/USD (BCU)
+  // de su fecha, el mismo del asiento de la factura (así la caja sale por los mismos dólares)
+  const tcPes = !cuyEsUSD(r) && cta.mon === 'USD' ? (cuyNum(r.tc) || cuyTcUY(cuyFacBase(r).fecha)) : null;
+  const monto = tcPes ? r2(cuyNum(r.total_uyu) / tcPes) : cuyEnMoneda(r, cta.mon);
+  if (monto == null || isNaN(monto)) return ' · ⚠ sin TC: no generé el movimiento de caja';
+  const fila = { cuenta: cta.n, fecha: r.fecha_pago || r.fecha, importe: -monto, tc: tcPes || cuyNum(r.tc), concepto: cuyLey([r.proveedor, r.serie_numero, r.concepto]),
     tipo:'pago', rubro: r.rubro, periodo: r.periodo, proveedor: r.proveedor, proveedor_cod: r.proveedor_cod, fac: r.serie_numero };
   try {
     const apls = cuyAplDeComp(r.id), m = apls.length && CUY.movs.find(x => x.id === apls[0].movimiento_id);
@@ -2490,7 +2497,10 @@ function cuyResCalc(desde, hasta){
   CUY.movs.filter(m => enRango(m.fecha)).forEach(m => {
     if (m.tipo === 'saldo_inicial') { fuera.push({ m, motivo: 'Saldo inicial: no genera asiento. Si en Tango lo registraste con un asiento, cambiale el tipo (ej. Entre cuentas) y cargá la contrapartida.' }); return; }
     if (cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') return;   // va en el asiento de la pata en dólares
-    if (cuyMovEnFactura(m)) return;                                              // va en el asiento de la factura
+    if (cuyMovEnFactura(m)) {                                                    // va en el asiento de la factura
+      const codCta = cuyPlan('CUENTA:' + m.cuenta).codigo, otros = [...new Set(cuyCompDeMov(m.id).map(r => cuyPlan(cuyClaveContra(r)).codigo).filter(c => c && c !== codCta))];
+      if (otros.length) fuera.push({ m, motivo: 'La factura acredita la cuenta ' + otros.join(', ') + ' (su contrapartida), no ' + (codCta || 'esta cuenta') + ' (' + m.cuenta + '). Si se pagó desde otra caja, cambiá la "Cuenta" de pago de la factura a esa caja.' });
+      return; }
     const mot = item(m, false); if (mot) fuera.push({ m, motivo: 'No entra: ' + mot });
   });
   // Cierres de mes guardados (ajuste por diferencia de cambio): DOL y PES. En $U no cambia nada.
