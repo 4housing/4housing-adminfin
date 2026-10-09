@@ -2433,17 +2433,21 @@ function cuyResGrupo(cod, rubro){
   if (cod[0] === '5') return CUY_RES_COSTO.test(rubro || '') ? 'cmv' : 'estr';
   return 'pat';
 }
+// Cotización con que quedó cada asiento en Tango (importada de la exportación "Asientos contables"): { 'N° asiento': { mon, cot } }
+const cuyTangoCot = () => { try { return JSON.parse(cuyPlan('CONFIG:TCTANGO').codigo || '{}') || {}; } catch(e) { return {}; } };
 function cuyResCalc(desde, hasta){
   CUY_ESP = cuyEspejos(); cuySerieArmar();
   const enRango = f => { const m = String(f || '').slice(0,7); return (!desde || m >= desde) && (!hasta || m <= hasta); };
-  const acc = {}, sinTc = [], sinCta = [], sinArs = [];
+  const acc = {}, sinTc = [], sinCta = [], sinArs = [], tg = cuyTangoCot(); let conTango = 0, conBillete = 0;
   const add = (g, cod, k, v) => { if (v == null || !r2(v)) return; const id = g + '|' + cod; acc[id] = acc[id] || { g, cod, usd: 0, uyu: 0, ars: 0 }; acc[id][k] += v; };
   const item = (x, fac) => {
     const dol = cuyAsientoDol(x, fac), desc = fac ? (x.proveedor || '') + ' ' + (x.serie_numero || '') : (x.cuenta + ' · ' + (x.concepto || ''));
     if (dol.falta.length) { sinTc.push(fmtFecha(x.fecha) + ' · ' + desc); return; }
     if (dol.lineas.some(l => !cuyPlan(l.clave).codigo)) { sinCta.push(fmtFecha(x.fecha) + ' · ' + desc); return; }
     let t; CUY_UY = true; try { t = fac ? cuyAsientoFac(x) : cuyAsientoMov(x); } finally { CUY_UY = false; }
-    const b = cuyBilleteDia(String(dol.fecha || x.fecha || '')); if (!b) sinArs.push(fmtFecha(x.fecha) + ' · ' + desc);
+    // AR$: la cotización con que quedó el asiento en Tango (si se importó y el ítem tiene N° de asiento); si no, el billete del día
+    const t0 = tg[String(x.asiento_num || '').trim()], b = t0 && t0.mon === 'DOL' && +t0.cot > 0 ? { v: +t0.cot } : cuyBilleteDia(String(dol.fecha || x.fecha || ''));
+    if (!b) sinArs.push(fmtFecha(x.fecha) + ' · ' + desc); else if (t0 && t0.mon === 'DOL') conTango++; else conBillete++;
     dol.lineas.forEach(l => { const cod = cuyPlan(l.clave).codigo, g = cuyResGrupo(cod, x.rubro); add(g, cod, 'usd', l.monto); if (b) add(g, cod, 'ars', l.monto * b.v); });
     t.lineas.forEach(l => { const cod = cuyPlan(l.clave).codigo; if (cod) add(cuyResGrupo(cod, x.rubro), cod, 'uyu', l.monto); });
   };
@@ -2461,7 +2465,39 @@ function cuyResCalc(desde, hasta){
   });
   const filas = Object.values(acc).map(f => Object.assign(f, { usd: r2(f.usd), uyu: r2(f.uyu), ars: r2(f.ars), nombre: (cuyDicCta(f.cod) || {}).desc || '' }))
     .sort((a,b) => a.cod.localeCompare(b.cod));
-  return { filas, sinTc, sinCta, sinArs, ajustes: Object.keys(porMes).sort() };
+  return { filas, sinTc, sinCta, sinArs, conTango, conBillete, ajustes: Object.keys(porMes).sort() };
+}
+// Lee la exportación de Tango (Asientos contables: hojas "Asientos contables" y "Cotizaciones") y guarda la cotización de cada asiento
+function cuyTangoCotImportar(){
+  if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+  abrirModal('Importar cotizaciones de Tango',
+    '<p style="margin:0 0 10px;font-size:12.5px;color:#5f5c52;line-height:1.5">Subí la exportación de <b>Asientos contables</b> de Tango (la misma que me mandás). Se guarda la cotización con que quedó cada asiento y Resultados la usa para el AR$ de los comprobantes / movimientos que tienen ese N° de asiento.</p>'
+    + '<input type="file" id="tg-file" accept=".xlsx,.xls"><div id="tg-prev" style="margin-top:10px;font-size:12.5px"></div><div id="tg-err" class="warn" style="margin-top:6px;font-size:12.5px"></div>',
+    '<button class="btn ghost" id="tg-cerrar">Cancelar</button><button class="btn" id="tg-ok" disabled>Guardar</button>');
+  const $ = i => document.getElementById(i); let nuevo = null;
+  $('tg-cerrar').addEventListener('click', cerrarModal);
+  $('tg-file').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return; $('tg-err').textContent = ''; $('tg-prev').textContent = ''; $('tg-ok').disabled = true;
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+      const hoja = n => { const k = wb.SheetNames.find(x => fold(x) === fold(n)); return k ? XLSX.utils.sheet_to_json(wb.Sheets[k], { defval: null }) : null; };
+      const asi = hoja('Asientos contables'), cot = hoja('Cotizaciones');
+      if (!asi || !cot) { $('tg-err').textContent = 'No encontré las hojas "Asientos contables" y "Cotizaciones".'; return; }
+      const mon = {}; asi.forEach(a => { if (a['Identificador'] != null) mon[String(a['Identificador']).trim()] = String(a['Código de moneda'] || '').trim(); });
+      const usados = new Set(CUY.lista.concat(CUY.movs).map(x => String(x.asiento_num || '').trim()).filter(Boolean));
+      nuevo = Object.assign({}, cuyTangoCot()); let n = 0;
+      cot.forEach(c => { const id = String(c['Identificador'] == null ? '' : c['Identificador']).trim(), v = +c['Cotización'];
+        if (id && usados.has(id) && v > 0) { nuevo[id] = { mon: mon[id] || String(c['Código de moneda'] || '').trim(), cot: v }; n++; } });
+      if (!n) { $('tg-err').textContent = 'Ningún asiento del archivo coincide con los N° de asiento cargados en la app.'; return; }
+      const sinNum = [...usados].filter(id => !nuevo[id]).length;
+      $('tg-prev').innerHTML = '<b>' + n + '</b> asiento(s) de la app encontrados en el archivo.' + (sinNum ? ' <span class="warn">' + sinNum + ' N° de asiento de la app no están en el archivo.</span>' : '');
+      $('tg-ok').disabled = false;
+    } catch (err) { $('tg-err').textContent = 'No pude leer el archivo: ' + (err.message || err); }
+  });
+  $('tg-ok').addEventListener('click', async () => {
+    try { await cuyPlanGuardar('CONFIG:TCTANGO', { codigo: JSON.stringify(nuevo), nombre: 'Cotización de cada asiento en Tango (importada)' }); cerrarModal(); toast('Cotizaciones de Tango guardadas'); cuyRender(); }
+    catch (e) { $('tg-err').textContent = 'No se guardó: ' + (e.message || e); }
+  });
 }
 function cuyRenderRes(){
   const meses = [...new Set(CUY.movs.map(m => String(m.fecha).slice(0,7)).concat(CUY.lista.map(r => String(r.fecha).slice(0,7))))].filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
@@ -2481,16 +2517,19 @@ function cuyRenderRes(){
   const sec = t => '<tr style="background:#efede4"><td colspan="4"><b>' + t + '</b></td></tr>';
   const sub = t => '<tr><td colspan="4" style="padding-top:8px"><i>' + t + '</i></td></tr>';
   const opts = (v, todos) => '<option value="">' + todos + '</option>' + meses.map(m => '<option value="' + m + '"' + (m === v ? ' selected' : '') + '>' + esc(cuyMesTxt(m)) + '</option>').join('');
+  const lst = (n, t, xs) => xs.length ? '<details><summary><b>' + xs.length + '</b> ' + t + '</summary><div class="hist" style="max-height:220px;margin-top:4px">' + xs.map(x => '<div class="it">' + esc(x) + '</div>').join('') + '</div></details>' : '';
   const pat = de('pat'), avisos = [
-    c.sinTc.length ? '<b>' + c.sinTc.length + '</b> sin cotización (no entran): ' + esc(c.sinTc.slice(0,5).join(' · ')) + (c.sinTc.length > 5 ? '…' : '') : '',
-    c.sinCta.length ? '<b>' + c.sinCta.length + '</b> sin cuenta contable o sin código en el Plan de cuentas (no entran): ' + esc(c.sinCta.slice(0,5).join(' · ')) + (c.sinCta.length > 5 ? '…' : '') : '',
-    c.sinArs.length ? '<b>' + c.sinArs.length + '</b> sin billete del día (no suman en AR$): ' + esc(c.sinArs.slice(0,5).join(' · ')) : ''].filter(Boolean);
-  document.getElementById('topActions').innerHTML = '<button class="btn ghost" id="rs-xls">' + ICO.xls + 'Exportar Excel</button>';
+    lst(0, 'sin cotización: no entran en el resumen', c.sinTc),
+    lst(0, 'sin cuenta contable o sin código en el Plan de cuentas: no entran en el resumen (completalos y vuelven a sumar)', c.sinCta),
+    lst(0, 'sin cotización para AR$: no suman en AR$', c.sinArs)].filter(Boolean);
+  document.getElementById('topActions').innerHTML = (SP.editar ? '<button class="btn ghost" id="rs-tg">' + ICO.upload + 'Importar cotizaciones de Tango</button>' : '') + '<button class="btn ghost" id="rs-xls">' + ICO.xls + 'Exportar Excel</button>';
   $main.innerHTML = cuyTabs()
     + '<div class="meta-bar">Se calcula solo con lo cargado en la app: los <b>mismos asientos que van a Tango</b> (comprobantes, pagos, gastos bancarios, cobranzas) y los <b>cierres de mes guardados</b>. '
-    + '<b>US$</b> = el asiento en DOL · <b>$U</b> = el asiento en pesos uruguayos (montos originales, el del contador UY) · <b>AR$</b> = US$ × billete del día; si en Tango cargaste otra cotización, puede diferir. '
+    + '<b>US$</b> = el asiento en DOL · <b>$U</b> = el asiento en pesos uruguayos (montos originales, el del contador UY) · <b>AR$</b> = US$ × la cotización con que quedó cada asiento en Tango (importada) o, si no está, el billete del día. '
     + 'Gastos: <b>CMV</b> = rubros de costo (B, D, F, H) y Módulo equipamiento (12400004); el resto, <b>estructura</b>.</div>'
-    + (avisos.length ? '<div class="card" style="border-color:#e2c48a"><div style="padding:10px 14px;font-size:12.5px">⚠ ' + avisos.join('<br>⚠ ') + '</div></div>' : '')
+    + (avisos.length ? '<div class="card" style="border-color:#e2c48a"><div style="padding:10px 14px;font-size:12.5px">⚠ ' + avisos.join('⚠ ') + '</div></div>' : '')
+    + '<div class="meta-bar">AR$: <b>' + c.conTango + '</b> asiento(s) con la cotización de Tango · <b>' + c.conBillete + '</b> con el billete del día (sin N° de asiento o sin importar). '
+    + 'Para que AR$ dé igual que el mayor, subí la exportación de Tango con <b>"Importar cotizaciones de Tango"</b> (usa el N° de asiento que cargaste en la solapa Asientos).</div>'
     + '<div class="card">' + cardH('Resultados', c.ajustes.length ? 'Incluye el ajuste de cierre de ' + c.ajustes.map(cuyMesTxt).join(', ') : 'Sin cierres de mes guardados en el período')
     + '<div class="tools" style="flex-wrap:wrap;gap:8px"><span style="font-size:12px;color:var(--muted)">Desde</span><select class="tc-in" style="width:auto;text-align:left" id="rs-desde">' + opts(par.desde, 'el inicio') + '</select>'
     + '<span style="font-size:12px;color:var(--muted)">hasta</span><select class="tc-in" style="width:auto;text-align:left" id="rs-hasta">' + opts(par.hasta, 'hoy') + '</select></div>'
@@ -2514,6 +2553,7 @@ function cuyRenderRes(){
     + '<div style="padding:8px 14px;font-size:12px;color:var(--muted)">$U de las cuentas en dólares: al TC de cada operación (como en el registro del contador UY). Los saldos reales de bancos se controlan en Conciliación bancos.</div></div>';
   cuyTabsEventos();
   const $ = i => document.getElementById(i);
+  if ($('rs-tg')) $('rs-tg').addEventListener('click', cuyTangoCotImportar);
   $('rs-desde').addEventListener('change', e => { par.desde = e.target.value; cuyRender(); });
   $('rs-hasta').addEventListener('change', e => { par.hasta = e.target.value; cuyRender(); });
   $('rs-piva').addEventListener('change', e => { par.piva = e.target.value === '' ? 0 : +e.target.value; guardar(); cuyRender(); });
