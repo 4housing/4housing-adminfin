@@ -929,7 +929,7 @@ async function cargarInforme(inf){
    una factura anulada + su N/C con el mismo TC netean a 0.
    ========================================================================== */
 const CUY_T = 'adminfin_contabilidad_uy';
-const CUY = { lista:[], cargado:false, movs:[], plan:{}, provs:[], provErr:'', movErr:'', tab:'comp', asTab:'fac',
+const CUY = { lista:[], cargado:false, movs:[], plan:{}, provs:[], provErr:'', clis:[], cliErr:'', movErr:'', tab:'comp', asTab:'fac',
               ctaSel:{ banco:'Santander USD', efectivo:'Efectivo pesos' }, sel:{ fac:new Set(), mov:new Set() },
               dic:{ cuentas:[], eerr:[] }, dicErr:'', cots:[], cierres:{}, cotErr:'', apl:[] };
 // Rubros de la hoja "Listas" del Excel CONTABILIDAD_UY_AVANCE_ORIENTAL (sugerencias; se puede escribir otro)
@@ -971,6 +971,9 @@ async function cuyCargar(){
     // Diccionario de proveedores UY (sql/2026-10_contabilidad_uy_proveedores.sql): opcional
     try { CUY.provs = (await selTodo(CUY_PROV_T, '*', null)).sort((a,b) => String(a.codigo).localeCompare(String(b.codigo))); CUY.provErr = ''; }
     catch (e) { CUY.provs = []; CUY.provErr = e.message || String(e); }
+    // Diccionario de clientes (sql/2026-10_contabilidad_uy_clientes.sql): opcional
+    try { CUY.clis = (await selTodo(CUY_CLI_T, '*', null)).sort((a,b) => String(a.codigo).localeCompare(String(b.codigo))); CUY.cliErr = ''; }
+    catch (e) { CUY.clis = []; CUY.cliErr = e.message || String(e); }
     CUY.cargado = true;
   } catch (error) {
     if (VISTA !== 'cuy') return;
@@ -1531,7 +1534,7 @@ function cuyMovsDe(cn){
 const cuySortMovs = () => CUY.movs.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
 
 /* ---------- Pestañas de Contabilidad UY ---------- */
-const CUY_TABS = [['comp','Comprobantes'], ['banco','Conciliación bancos'], ['efectivo','Efectivo'], ['asientos','Asientos'], ['res','Resultados'], ['cot','Cotizaciones'], ['prov','Proveedores'], ['plan','Plan de cuentas']];
+const CUY_TABS = [['comp','Comprobantes'], ['banco','Conciliación bancos'], ['efectivo','Efectivo'], ['asientos','Asientos'], ['res','Resultados'], ['cot','Cotizaciones'], ['prov','Proveedores'], ['cli','Clientes'], ['plan','Plan de cuentas']];
 function cuyTabs(){
   return '<div class="mtabs" style="margin:4px 0 14px">' + CUY_TABS.map(([id,l]) => '<button class="mtab' + (CUY.tab === id ? ' active' : '') + '" data-cuytab="' + id + '">' + l + '</button>').join('') + '</div>';
 }
@@ -1569,6 +1572,7 @@ function cuyRender0(){
   if (CUY.tab === 'cot') return cuyRenderCot();
   if (CUY.tab === 'prov') return cuyRenderProv();
   if (CUY.tab === 'res') return cuyRenderRes();
+  if (CUY.tab === 'cli') return cuyRenderCli();
   return cuyRenderPlan();
 }
 
@@ -1853,7 +1857,8 @@ function cuyMovForm(id, preset){
     + '<div class="frow c2">' + inp('mf-com','Comentarios', c.comentarios) + inp('mf-asn','N° asiento Tango (si ya está registrado)', c.asiento_num, ' placeholder="vacío = pendiente de exportar"') + '</div>'
     + dl('dl-mclas', ['COBRANZA','GASTOS BANCARIOS','ENTRE BANCOS','HONORARIOS','RETIRO BANCO','SMALL BALANCE'].concat(CUY.movs.map(x => x.clasificacion)))
     + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', cuyProyOpciones(CUY.movs.map(x => x.auxiliar))) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.filter(x => x.tipo !== 'ingreso').map(x => x.proveedor)))
-    + dl('dl-mcli', CUY.movs.filter(x => x.tipo === 'ingreso').map(x => x.proveedor))
+    + dl('dl-mcli', CUY.clis.map(x => x.nombre).concat(CUY.movs.filter(x => x.tipo === 'ingreso').map(x => x.proveedor)))
+    + '<datalist id="dl-mclicod">' + CUY.clis.map(x => '<option value="' + esc(x.codigo) + '">' + esc(x.codigo + ' - ' + x.nombre) + '</option>').join('') + '</datalist>'
     + '<div class="err" id="mf-err"></div>',
     '<button class="btn ghost" id="mf-no">Cancelar</button><button class="btn" id="mf-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i), v = i => $(i).value.trim(), n = i => v(i) === '' ? null : +v(i);
@@ -1862,8 +1867,14 @@ function cuyMovForm(id, preset){
   const lbl = (i, t) => { const l = $(i).previousElementSibling; if (l) l.textContent = t; };
   const tercero = () => { const ing = $('mf-tipo').value === 'ingreso';
     lbl('mf-prov', ing ? 'Cliente' : 'Proveedor'); lbl('mf-cod', ing ? 'Código cliente' : 'Código proveedor'); lbl('mf-fac', ing ? 'Factura emitida' : 'FAC');
-    $('mf-prov').setAttribute('list', ing ? 'dl-mcli' : 'dl-mprov'); };
+    $('mf-prov').setAttribute('list', ing ? 'dl-mcli' : 'dl-mprov'); if (ing) $('mf-cod').setAttribute('list', 'dl-mclicod'); else $('mf-cod').removeAttribute('list'); };
   tercero(); $('mf-tipo').addEventListener('change', tercero);
+  // Cliente del diccionario: completa nombre / código y, si están vacíos, contrapartida, rubro y proyecto
+  ['mf-prov', 'mf-cod'].forEach(id => $(id).addEventListener('change', () => {
+    if ($('mf-tipo').value !== 'ingreso') return; const k = cuyCliBuscar($(id).value); if (!k) return;
+    $('mf-prov').value = k.nombre; $('mf-cod').value = k.codigo;
+    [['mf-contra', k.cuenta_contable], ['mf-rubro', k.rubro], ['mf-aux', k.proyecto]].forEach(([i, val]) => { if (val && !$(i).value.trim()) $(i).value = val; });
+    if (!$('mf-clas').value.trim()) $('mf-clas').value = 'COBRANZA'; }));
   $('mf-ok').addEventListener('click', async () => {
     const err = $('mf-err'); err.textContent = '';
     if (!v('mf-fecha')) { err.textContent = 'Poné la fecha.'; return; }
@@ -3085,6 +3096,81 @@ function cuyProvImportar(){
       (data || []).forEach(d => { const k = CUY.provs.findIndex(p => p.codigo === d.codigo); if (k >= 0) CUY.provs[k] = d; else CUY.provs.push(d); });
       CUY.provs.sort((a,b) => a.codigo.localeCompare(b.codigo)); cerrarModal(); toast(filas.length + ' proveedores importados'); cuyRender(); }
     catch (e) { $('pi-err').textContent = 'Error: ' + (e.message || e); $('pi-ok').disabled = false; }
+  });
+}
+/* ---------- Clientes de Uruguay (diccionario: sql/2026-10_contabilidad_uy_clientes.sql) ----------
+   Código corto, nombre, RUT / documento y la contrapartida / rubro / proyecto habitual de la cobranza. En los movimientos
+   de tipo Ingreso, escribir el nombre o el código del cliente completa lo demás. Se guarda en el movimiento en los campos
+   proveedor / proveedor_cod (los mismos de siempre). */
+const CUY_CLI_T = 'adminfin_cuy_clientes';
+function cuyCliBuscar(txt){
+  const t = fold(String(txt || '').trim()), rut = cuyRutNorm(txt); if (!t) return null;
+  return CUY.clis.find(p => fold(p.codigo) === t) || CUY.clis.find(p => fold(p.nombre) === t)
+    || (rut.length >= 6 ? CUY.clis.find(p => cuyRutNorm(p.rut) === rut) : null) || null;
+}
+const cuyIngresos = () => CUY.movs.filter(m => m.tipo === 'ingreso');
+function cuyRenderCli(){
+  const ta = document.getElementById('topActions');
+  ta.innerHTML = SP.editar && !CUY.cliErr ? '<button class="btn" id="cl-nuevo">' + ICO.plus + 'Nuevo cliente</button>' : '';
+  if (CUY.cliErr) { $main.innerHTML = cuyTabs() + '<div class="card"><div class="empty">No pude leer los clientes: ' + esc(CUY.cliErr) + '<br><span class="muted">Falta correr sql/2026-10_contabilidad_uy_clientes.sql en Supabase.</span></div></div>'; cuyTabsEventos(); return; }
+  const usos = c => cuyIngresos().filter(m => fold(m.proveedor_cod || '') === fold(c));
+  const fuera = cuyIngresos().filter(m => !String(m.proveedor_cod || '').trim() || !CUY.clis.some(p => fold(p.codigo) === fold(m.proveedor_cod)));
+  const cols = [
+    { id:'cod', t:'Código', s:p => p.codigo, td:p => '<b>' + esc(p.codigo) + '</b>' },
+    { id:'nom', t:'Nombre / razón social', s:p => p.nombre || '', td:p => esc(p.nombre || '') },
+    { id:'rut', t:'RUT / documento', s:p => p.rut || '', td:p => esc(p.rut || '—') },
+    { id:'pais', t:'País', v:p => p.pais || '(sin dato)', td:p => esc(p.pais || '—') },
+    { id:'mon', t:'Moneda', v:p => p.moneda || '(sin dato)', td:p => esc(p.moneda || '—') },
+    { id:'cc', t:'Cuenta / rubro / proyecto', td:p => [p.cuenta_contable, p.rubro, p.proyecto].filter(Boolean).map(esc).join(' · ') || '<span class="muted">—</span>' },
+    { id:'n', t:'Cobranzas', s:p => usos(p.codigo).length, cls:'num', td:p => usos(p.codigo).length || '<span class="muted">0</span>' },
+    { id:'tot', t:'Cobrado', cls:'num', s:p => usos(p.codigo).reduce((a,m) => a + (+m.importe || 0), 0), td:p => { const xs = usos(p.codigo); if (!xs.length) return '<span class="muted">—</span>';
+        const por = {}; xs.forEach(m => { const mo = cuyCta(m.cuenta).mon; por[mo] = (por[mo] || 0) + (+m.importe || 0); }); return Object.entries(por).map(([mo, v]) => fmtMon(r2(v), mo)).join('<br>'); } },
+    { id:'acc', t:'', td:p => SP.editar ? '<div class="row-actions"><button class="iconbtn" title="Editar" data-cl-ed="' + esc(p.codigo) + '">' + ICO.edit + '</button><button class="iconbtn del" title="Eliminar" data-cl-del="' + esc(p.codigo) + '">' + ICO.del + '</button></div>' : '' },
+  ];
+  TABLAS.cli = { cols, base: () => CUY.clis };
+  const f = tablaFiltrar('cli', cols, CUY.clis, p => [p.codigo, p.nombre, p.rut, p.pais].join(' '));
+  $main.innerHTML = cuyTabs()
+    + '<div class="meta-bar">Diccionario de clientes: en los movimientos de tipo <b>Ingreso</b>, el nombre o el código del cliente completan la contrapartida, el rubro y el proyecto habituales.</div>'
+    + (fuera.length ? '<div class="card" style="margin-bottom:16px">' + cardH('Ingresos con cliente fuera del diccionario (' + fuera.length + ')', 'Sin código de cliente, o con un código que no está acá.')
+        + '<div class="hist" style="max-height:200px;padding:0 14px 10px">' + fuera.map(m => '<div class="it">' + fmtFecha(m.fecha) + ' · ' + esc(m.cuenta) + ' · ' + fmtMon(+m.importe, cuyCta(m.cuenta).mon) + ' · ' + esc(m.proveedor || m.concepto || '') + ' · código: <b>' + esc(m.proveedor_cod || '(vacío)') + '</b>'
+          + (SP.editar ? ' <button class="btn ghost sm" data-cl-desde="' + esc(m.id) + '">Agregar al diccionario</button> <button class="btn ghost sm" data-cl-mov="' + esc(m.id) + '">Editar ingreso</button>' : '') + '</div>').join('') + '</div></div>' : '')
+    + '<div class="card">' + cardH('Clientes (' + CUY.clis.length + ')', '')
+    + (CUY.clis.length ? tablaHerramientas('cli', 'Buscar código, nombre, documento…') + tablaHtml('cli', cols, f) : '<div class="empty">Todavía no hay clientes. Cargalos con "Nuevo cliente" o desde un ingreso de la lista de arriba.</div>') + '</div>';
+  tablaEventos(); cuyTabsEventos();
+  const b0 = document.getElementById('cl-nuevo'); if (b0) b0.addEventListener('click', () => cuyCliForm(null));
+  $main.querySelectorAll('[data-cl-ed]').forEach(b => b.addEventListener('click', () => cuyCliForm(b.dataset.clEd)));
+  $main.querySelectorAll('[data-cl-mov]').forEach(b => b.addEventListener('click', () => cuyMovForm(b.dataset.clMov)));
+  $main.querySelectorAll('[data-cl-desde]').forEach(b => b.addEventListener('click', () => { const m = CUY.movs.find(x => x.id === b.dataset.clDesde); if (!m) return;
+    cuyCliForm(null, { codigo: m.proveedor_cod || '', nombre: m.proveedor || '', moneda: cuyCta(m.cuenta).mon === 'USD' ? 'USD' : 'UY', cuenta_contable: m.contrapartida || '', rubro: m.rubro || '', proyecto: m.auxiliar || '' }); }));
+  $main.querySelectorAll('[data-cl-del]').forEach(b => b.addEventListener('click', async () => {
+    const c = b.dataset.clDel, n = usos(c).length; if (!confirm(n ? c + ' tiene ' + n + ' cobranza(s). ¿Lo saco igual del diccionario? (los movimientos no se tocan)' : '¿Eliminar el cliente ' + c + '?')) return;
+    try { const { error } = await sb.from(CUY_CLI_T).delete().eq('codigo', c); if (error) throw error; CUY.clis = CUY.clis.filter(p => p.codigo !== c); toast('Cliente eliminado'); cuyRender(); }
+    catch (e) { toast('No se pudo: ' + (e.message || e)); } }));
+}
+function cuyCliForm(cod, preset){
+  const p0 = cod ? CUY.clis.find(p => p.codigo === cod) : null, c = p0 || preset || {};
+  const inp = (i, l, v, x) => '<div class="field"><label>' + l + '</label><input id="' + i + '" value="' + esc(v == null ? '' : v) + '"' + (x || '') + '></div>';
+  abrirModal(p0 ? 'Editar cliente · ' + p0.codigo : 'Nuevo cliente',
+    '<div class="frow c3">' + inp('cl-cod', 'Código *', c.codigo, (p0 ? ' disabled' : '') + ' placeholder="Ej. ANDY"') + inp('cl-nom', 'Nombre / razón social *', c.nombre) + inp('cl-rut', 'RUT / documento', c.rut) + '</div>'
+    + '<div class="frow c3">' + inp('cl-pais', 'País', c.pais, ' placeholder="Ej. Uruguay"') + inp('cl-mon', 'Moneda habitual', c.moneda, ' list="dl-cl-mon" placeholder="USD / UY"') + inp('cl-mail', 'Email', c.email) + '</div>'
+    + '<div class="frow c3">' + inp('cl-cc', 'Contrapartida habitual (Tango)', c.cuenta_contable || (p0 ? '' : '41000001'), ' list="dl-cl-cta"') + inp('cl-rub', 'Rubro habitual', c.rubro || (p0 ? '' : 'A) VENTA'), ' list="dl-cl-rub"') + inp('cl-proy', 'Proyecto habitual', c.proyecto, ' placeholder="Ej. PL0096 ANDY" list="dl-cl-proy"') + '</div>'
+    + '<div class="frow">' + inp('cl-obs', 'Observaciones', c.observaciones) + '</div>'
+    + '<datalist id="dl-cl-proy">' + [...new Set(cuyProyOpciones(CUY.movs.map(x => x.auxiliar)).filter(Boolean))].map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'
+    + '<datalist id="dl-cl-mon"><option value="USD"><option value="UY"></datalist><datalist id="dl-cl-rub">' + CUY_RUBROS.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'
+    + '<datalist id="dl-cl-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist><div class="err" id="cl-err"></div>',
+    '<button class="btn ghost" id="cl-no">Cancelar</button><button class="btn" id="cl-ok">Guardar</button>', 'wide');
+  const $ = i => document.getElementById(i), v = i => $(i).value.trim();
+  $('cl-no').addEventListener('click', cerrarModal); ['cl-rub', 'cl-proy'].forEach(cuyListaCompleta);
+  $('cl-ok').addEventListener('click', async () => {
+    const codigo = (p0 ? p0.codigo : v('cl-cod')).toUpperCase(), err = $('cl-err');
+    if (!codigo || !v('cl-nom')) { err.textContent = 'Código y nombre son obligatorios.'; return; }
+    if (!p0 && CUY.clis.some(p => p.codigo === codigo)) { err.textContent = 'Ya existe el código ' + codigo + '.'; return; }
+    const fila = { codigo, nombre: v('cl-nom'), rut: v('cl-rut') || null, pais: v('cl-pais') || null, moneda: v('cl-mon') || null, email: v('cl-mail') || null,
+      cuenta_contable: v('cl-cc') || null, rubro: v('cl-rub') || null, proyecto: v('cl-proy') || null, observaciones: v('cl-obs') || null };
+    try { const { data, error } = await sb.from(CUY_CLI_T).upsert(fila, { onConflict:'codigo' }).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso de edición.');
+      const k = CUY.clis.findIndex(p => p.codigo === codigo); if (k >= 0) CUY.clis[k] = data[0]; else CUY.clis.push(data[0]);
+      CUY.clis.sort((a,b) => a.codigo.localeCompare(b.codigo)); cerrarModal(); toast('Cliente guardado'); cuyRender(); }
+    catch (e) { err.textContent = 'Error: ' + (e.message || e); }
   });
 }
 function cuyRenderPlan(){
