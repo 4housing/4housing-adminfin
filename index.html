@@ -2570,10 +2570,12 @@ function cuyRenderRes(){
   const de = g => c.filas.filter(f => f.g === g), suma = (fs, k, s) => r2(fs.reduce((a,f) => a + s * f[k], 0));
   const tot = (g, s) => { const fs = de(g); return { usd: suma(fs,'usd',s), uyu: suma(fs,'uyu',s), ars: suma(fs,'ars',s) }; };
   const ven = tot('ventas', -1), cmv = tot('cmv', 1), est = tot('estr', 1), dif = tot('dif', -1), ivaCf = tot('iva', 1);
-  const op = o => ({ usd: r2(o(ven.usd, cmv.usd, est.usd, dif.usd)), uyu: r2(o(ven.uyu, cmv.uyu, est.uyu, dif.uyu)), ars: r2(o(ven.ars, cmv.ars, est.ars, dif.ars)) });
-  const gas = op((v,c_,e) => c_ + e), rop = op((v,c_,e) => v - c_ - e), rnet = op((v,c_,e,d) => v - c_ - e + d);
+  // IVA débito fiscal proyectado: si lo cobrado ya incluye el IVA, se descuenta de las ventas (ventas netas = cobrado − IVA)
   const p = (+par.piva || 0) / 100, fac = par.incl ? p / (1 + p) : p;
   const df = { usd: r2(ven.usd * fac), uyu: r2(ven.uyu * fac), ars: r2(ven.ars * fac) }, sal = { usd: r2(df.usd - ivaCf.usd), uyu: r2(df.uyu - ivaCf.uyu), ars: r2(df.ars - ivaCf.ars) };
+  const venNet = par.incl ? { usd: r2(ven.usd - df.usd), uyu: r2(ven.uyu - df.uyu), ars: r2(ven.ars - df.ars) } : ven, dfNeg = { usd: -df.usd, uyu: -df.uyu, ars: -df.ars };
+  const op = o => ({ usd: r2(o(venNet.usd, cmv.usd, est.usd, dif.usd)), uyu: r2(o(venNet.uyu, cmv.uyu, est.uyu, dif.uyu)), ars: r2(o(venNet.ars, cmv.ars, est.ars, dif.ars)) });
+  const gas = op((v,c_,e) => c_ + e), rop = op((v,c_,e) => v - c_ - e), rnet = op((v,c_,e,d) => v - c_ - e + d);
   const tdM = o => MON.map(([k, m]) => '<td class="num">' + fmtMon(o[k], m) + '</td>').join('');
   const filaCta = (f, s) => '<tr><td style="padding-left:22px">' + esc(f.cod) + ' · ' + esc(f.nombre) + '</td>' + tdM({ usd: s * f.usd, uyu: s * f.uyu, ars: s * f.ars }) + '</tr>';
   const filaTot = (t, o, cls) => '<tr class="' + (cls || '') + '"><td><b>' + t + '</b></td>' + MON.map(([k, m]) => '<td class="num"><b>' + fmtMon(o[k], m) + '</b></td>').join('') + '</tr>';
@@ -2601,11 +2603,12 @@ function cuyRenderRes(){
     + '<div class="tools" style="flex-wrap:wrap;gap:8px"><span style="font-size:12px;color:var(--muted)">Desde</span><select class="tc-in" style="width:auto;text-align:left" id="rs-desde">' + opts(par.desde, 'el inicio') + '</select>'
     + '<span style="font-size:12px;color:var(--muted)">hasta</span><select class="tc-in" style="width:auto;text-align:left" id="rs-hasta">' + opts(par.hasta, 'hoy') + '</select></div>'
     + '<div class="tbl-hscroll"><table class="grid"><thead><tr><th>Concepto</th><th>US$</th><th>$U</th><th>AR$</th></tr></thead><tbody>'
-    + sec('1. Ventas') + de('ventas').map(f => filaCta(f, -1)).join('') + filaTot('Total ventas', ven)
+    + sec('1. Ventas') + de('ventas').map(f => filaCta(f, -1)).join('')
+    + (par.incl ? filaTot('Total cobrado (IVA incluido)', ven) + '<tr><td style="padding-left:22px">− IVA débito fiscal proyectado (' + esc(par.piva) + ' %)</td>' + tdM(dfNeg) + '</tr>' + filaTot('Ventas netas', venNet) : filaTot('Ventas netas (sin IVA)', ven))
     + sec('2. Gastos') + sub('2.1 Costo de la mercadería vendida (CMV)') + de('cmv').map(f => filaCta(f, 1)).join('') + filaTot('Subtotal CMV', cmv)
     + sub('2.2 Gastos de estructura') + de('estr').map(f => filaCta(f, 1)).join('') + filaTot('Subtotal estructura', est)
     + filaTot('Total gastos', gas)
-    + sec('3. Resultado neto') + filaTot('Resultado operativo (ventas − gastos)', rop)
+    + sec('3. Resultado neto') + filaTot('Resultado operativo (ventas netas − gastos)', rop)
     + de('dif').map(f => filaCta(f, -1)).join('') + filaTot('Diferencia de cambio neta (ganancia − pérdida)', dif)
     + filaTot('RESULTADO NETO', rnet, 'revisar')
     + sec('4. IVA')
@@ -2638,10 +2641,11 @@ function cuyRenderRes(){
     if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
     const aoa = [['Resultados Contabilidad UY · ' + (par.desde ? cuyMesTxt(par.desde) : 'inicio') + ' a ' + (par.hasta ? cuyMesTxt(par.hasta) : 'hoy')], [], ['Concepto', 'Cuenta', 'US$', '$U', 'AR$']];
     const fa = (t, o, cod) => aoa.push([t, cod || '', o.usd, o.uyu, o.ars]), fc = (f, s) => fa(f.nombre, { usd: s * f.usd, uyu: s * f.uyu, ars: s * f.ars }, f.cod);
-    aoa.push(['1. VENTAS']); de('ventas').forEach(f => fc(f, -1)); fa('Total ventas', ven);
+    aoa.push(['1. VENTAS']); de('ventas').forEach(f => fc(f, -1));
+    if (par.incl) { fa('Total cobrado (IVA incluido)', ven); fa('− IVA débito fiscal proyectado (' + par.piva + ' %)', dfNeg); fa('Ventas netas', venNet); } else fa('Ventas netas (sin IVA)', ven);
     aoa.push(['2. GASTOS'], ['2.1 CMV']); de('cmv').forEach(f => fc(f, 1)); fa('Subtotal CMV', cmv);
     aoa.push(['2.2 Estructura']); de('estr').forEach(f => fc(f, 1)); fa('Subtotal estructura', est); fa('Total gastos', gas);
-    aoa.push(['3. RESULTADO NETO']); fa('Resultado operativo', rop); de('dif').forEach(f => fc(f, -1)); fa('Diferencia de cambio neta', dif); fa('RESULTADO NETO', rnet);
+    aoa.push(['3. RESULTADO NETO']); fa('Resultado operativo (ventas netas − gastos)', rop); de('dif').forEach(f => fc(f, -1)); fa('Diferencia de cambio neta', dif); fa('RESULTADO NETO', rnet);
     aoa.push(['4. IVA']); fa('IVA débito fiscal proyectado (' + par.piva + ' %' + (par.incl ? ', incluido en lo cobrado' : ', sobre lo cobrado') + ')', df); fa('IVA crédito fiscal', ivaCf); fa('Saldo de IVA (DF − CF)', sal);
     aoa.push([], ['CUENTAS PATRIMONIALES (Debe − Haber)']); pat.forEach(f => fc(f, 1));
     aoa.push([], ['US$ = asiento en DOL; $U = asiento en pesos uruguayos (montos originales); AR$ = US$ × billete del día. Incluye los cierres de mes guardados.']);
