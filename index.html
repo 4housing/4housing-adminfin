@@ -2470,7 +2470,7 @@ const cuyTangoCot = () => { try { return JSON.parse(cuyPlan('CONFIG:TCTANGO').co
 function cuyResCalc(desde, hasta){
   CUY_ESP = cuyEspejos(); cuySerieArmar();
   const enRango = f => { const m = String(f || '').slice(0,7); return (!desde || m >= desde) && (!hasta || m <= hasta); };
-  const acc = {}, sinTc = [], sinCta = [], sinArs = [], tg = cuyTangoCot(); let conTango = 0, conBillete = 0;
+  const acc = {}, sinTc = [], sinCta = [], sinArs = [], tg = cuyTangoCot(), conBil = []; let conTango = 0, conBillete = 0;
   const add = (g, cod, k, v) => { if (v == null || !r2(v)) return; const id = g + '|' + cod; acc[id] = acc[id] || { g, cod, usd: 0, uyu: 0, ars: 0 }; acc[id][k] += v; };
   const item = (x, fac) => {
     const dol = cuyAsientoDol(x, fac), desc = fac ? (x.proveedor || '') + ' ' + (x.serie_numero || '') : (x.cuenta + ' · ' + (x.concepto || ''));
@@ -2480,7 +2480,7 @@ function cuyResCalc(desde, hasta){
     let t; CUY_UY = true; try { t = fac ? cuyAsientoFac(x) : cuyAsientoMov(x); } finally { CUY_UY = false; }
     // AR$: la cotización con que quedó el asiento en Tango (si se importó y el ítem tiene N° de asiento); si no, el billete del día
     const t0 = tg[String(x.asiento_num || '').trim()], b = t0 && t0.mon === 'DOL' && +t0.cot > 0 ? { v: +t0.cot } : cuyBilleteDia(String(dol.fecha || x.fecha || ''));
-    if (!b) sinArs.push(fmtFecha(x.fecha) + ' · ' + desc); else if (t0 && t0.mon === 'DOL') conTango++; else conBillete++;
+    if (!b) sinArs.push(fmtFecha(x.fecha) + ' · ' + desc); else if (t0 && t0.mon === 'DOL') conTango++; else { conBillete++; conBil.push({ x, fac, desc, tc: b.v, usd: Math.abs((dol.lineas.find(l => l.monto > 0) || {}).monto || 0) }); }
     dol.lineas.forEach(l => { const cod = cuyPlan(l.clave).codigo, g = cuyResGrupo(cod, x.rubro); add(g, cod, 'usd', l.monto); if (b) add(g, cod, 'ars', l.monto * b.v); });
     t.lineas.forEach(l => { const cod = cuyPlan(l.clave).codigo; if (cod) add(cuyResGrupo(cod, x.rubro), cod, 'uyu', l.monto); });
   };
@@ -2512,7 +2512,7 @@ function cuyResCalc(desde, hasta){
     const libro = r2(movs.reduce((a, m) => a + (+m.importe || 0), 0)), res = r2(filas.filter(f => f.cod === cod).reduce((a, f) => a + f[k], 0));
     return { cuenta: ct.n, cod, mon: ct.mon === 'USD' ? 'USD' : 'UYU', libro, res, dif: r2(libro - res), fuera: fuera.filter(x => x.m.cuenta === ct.n) };
   }).filter(Boolean);
-  return { filas, sinTc, sinCta, sinArs, conTango, conBillete, control, ajustes: Object.keys(porMes).sort() };
+  return { filas, sinTc, sinCta, sinArs, conTango, conBillete, conBil, hayTango: Object.keys(tg).length > 0, control, ajustes: Object.keys(porMes).sort() };
 }
 // Lee la exportación de Tango (Asientos contables: hojas "Asientos contables" y "Cotizaciones") y guarda la cotización de cada asiento
 function cuyTangoCotImportar(){
@@ -2575,8 +2575,12 @@ function cuyRenderRes(){
     + '<b>US$</b> = el asiento en DOL · <b>$U</b> = el asiento en pesos uruguayos (montos originales, el del contador UY) · <b>AR$</b> = US$ × la cotización con que quedó cada asiento en Tango (importada) o, si no está, el billete del día. '
     + 'Gastos: <b>CMV</b> = rubros de costo (B, D, F, H) y Módulo equipamiento (12400004); el resto, <b>estructura</b>.</div>'
     + (avisos.length ? '<div class="card" style="border-color:#e2c48a"><div style="padding:10px 14px;font-size:12.5px">⚠ ' + avisos.join('⚠ ') + '</div></div>' : '')
-    + '<div class="meta-bar">AR$: <b>' + c.conTango + '</b> asiento(s) con la cotización de Tango · <b>' + c.conBillete + '</b> con el billete del día (sin N° de asiento o sin importar). '
-    + 'Para que AR$ dé igual que el mayor, subí la exportación de Tango con <b>"Importar cotizaciones de Tango"</b> (usa el N° de asiento que cargaste en la solapa Asientos).</div>'
+    + '<div class="meta-bar">AR$: <b>' + c.conTango + '</b> asiento(s) con la cotización de Tango · <b>' + c.conBillete + '</b> con el billete del día. '
+    + 'Para que AR$ dé igual que el mayor, subí la exportación de Tango con <b>"Importar cotizaciones de Tango"</b>: se cruza por el N° de asiento de cada comprobante / movimiento.'
+    + (c.conBil.length && c.hayTango ? '<details style="margin-top:6px"><summary><b>Ver los ' + c.conBil.length + ' que van con el billete del día</b> (sin N° de asiento, o con un N° que no está en el archivo de Tango: corregilo y volvé a importar)</summary><div class="hist" style="max-height:260px;margin-top:4px">'
+        + c.conBil.map(o => '<div class="it">' + fmtFecha(o.x.fecha) + ' · ' + esc(o.desc) + ' · US$ ' + fmtNum(o.usd) + ' · billete ' + fmtTC(o.tc) + ' · N° asiento: <b>' + esc(o.x.asiento_num || '(vacío)') + '</b>'
+          + (SP.editar ? ' <button class="btn ghost sm" data-rs-ed="' + (o.fac ? 'f' : 'm') + ':' + esc(o.x.id) + '">Editar</button>' : '') + '</div>').join('') + '</div></details>' : '')
+    + '</div>'
     + '<div class="card">' + cardH('Resultados', c.ajustes.length ? 'Incluye el ajuste de cierre de ' + c.ajustes.map(cuyMesTxt).join(', ') : 'Sin cierres de mes guardados en el período')
     + '<div class="tools" style="flex-wrap:wrap;gap:8px"><span style="font-size:12px;color:var(--muted)">Desde</span><select class="tc-in" style="width:auto;text-align:left" id="rs-desde">' + opts(par.desde, 'el inicio') + '</select>'
     + '<span style="font-size:12px;color:var(--muted)">hasta</span><select class="tc-in" style="width:auto;text-align:left" id="rs-hasta">' + opts(par.hasta, 'hoy') + '</select></div>'
@@ -2609,6 +2613,7 @@ function cuyRenderRes(){
   const $ = i => document.getElementById(i);
   if ($('rs-tg')) $('rs-tg').addEventListener('click', cuyTangoCotImportar);
   $main.querySelectorAll('[data-rs-mov]').forEach(b => b.addEventListener('click', () => cuyMovForm(b.dataset.rsMov)));
+  $main.querySelectorAll('[data-rs-ed]').forEach(b => b.addEventListener('click', () => { const [t, id] = [b.dataset.rsEd.slice(0,1), b.dataset.rsEd.slice(2)]; if (t === 'f') cuyForm(id); else cuyMovForm(id); }));
   $('rs-desde').addEventListener('change', e => { par.desde = e.target.value; cuyRender(); });
   $('rs-hasta').addEventListener('change', e => { par.hasta = e.target.value; cuyRender(); });
   $('rs-piva').addEventListener('change', e => { par.piva = e.target.value === '' ? 0 : +e.target.value; guardar(); cuyRender(); });
