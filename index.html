@@ -1852,11 +1852,18 @@ function cuyMovForm(id, preset){
     + '<datalist id="dl-mf-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>'
     + '<div class="frow c2">' + inp('mf-com','Comentarios', c.comentarios) + inp('mf-asn','N° asiento Tango (si ya está registrado)', c.asiento_num, ' placeholder="vacío = pendiente de exportar"') + '</div>'
     + dl('dl-mclas', ['COBRANZA','GASTOS BANCARIOS','ENTRE BANCOS','HONORARIOS','RETIRO BANCO','SMALL BALANCE'].concat(CUY.movs.map(x => x.clasificacion)))
-    + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', cuyProyOpciones(CUY.movs.map(x => x.auxiliar))) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.map(x => x.proveedor)))
+    + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', cuyProyOpciones(CUY.movs.map(x => x.auxiliar))) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.filter(x => x.tipo !== 'ingreso').map(x => x.proveedor)))
+    + dl('dl-mcli', CUY.movs.filter(x => x.tipo === 'ingreso').map(x => x.proveedor))
     + '<div class="err" id="mf-err"></div>',
     '<button class="btn ghost" id="mf-no">Cancelar</button><button class="btn" id="mf-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i), v = i => $(i).value.trim(), n = i => v(i) === '' ? null : +v(i);
   $('mf-no').addEventListener('click', cerrarModal); ['mf-clas', 'mf-rubro', 'mf-aux'].forEach(cuyListaCompleta);
+  // Ingreso (cobranza): el tercero es un cliente, no un proveedor (se guarda en los mismos campos)
+  const lbl = (i, t) => { const l = $(i).previousElementSibling; if (l) l.textContent = t; };
+  const tercero = () => { const ing = $('mf-tipo').value === 'ingreso';
+    lbl('mf-prov', ing ? 'Cliente' : 'Proveedor'); lbl('mf-cod', ing ? 'Código cliente' : 'Código proveedor'); lbl('mf-fac', ing ? 'Factura emitida' : 'FAC');
+    $('mf-prov').setAttribute('list', ing ? 'dl-mcli' : 'dl-mprov'); };
+  tercero(); $('mf-tipo').addEventListener('change', tercero);
   $('mf-ok').addEventListener('click', async () => {
     const err = $('mf-err'); err.textContent = '';
     if (!v('mf-fecha')) { err.textContent = 'Poné la fecha.'; return; }
