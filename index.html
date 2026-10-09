@@ -1487,9 +1487,15 @@ function cuySaldoEn(c, mon, fecha){
   const mo = cuyEsUSD(c) ? 'USD' : 'UYU'; if (mo === mon) return sal;
   const tc = cuyTcCruce(c, fecha); if (!tc) return null; return r2(mon === 'UYU' ? sal * tc : sal / tc);
 }
+// Tolerancia del saldo de una factura: 1 centavo; si se pagó desde una cuenta en otra moneda (ej. factura en pesos pagada en
+// dólares), el redondeo a centavos de US$ puede dejar hasta ~$U 0,25
+function cuyTolFac(r){
+  const mo = cuyEsUSD(r) ? 'USD' : 'UYU';
+  return cuyAplDeComp(r.id).some(a => { const m = CUY.movs.find(x => x.id === a.movimiento_id); return m && cuyCta(m.cuenta).mon !== mo; }) ? (mo === 'UYU' ? 0.25 : 0.01) : 0.01;
+}
 function cuyCompConc(r){
   if (cuyAplDeComp(r.id).length) { const sal = cuySaldoFac(r);
-    if (sal == null || Math.abs(sal) <= 0.01) return 'Con movimiento';
+    if (sal == null || Math.abs(sal) <= cuyTolFac(r)) return 'Con movimiento';
     return (cuyFacTotal(r) > 0 ? sal > 0 : sal < 0) ? 'Pago parcial' : 'Pagado de más'; }
   if (r.anulada || String(r.estado_pago || '').toUpperCase() === 'ANULADA' || String(r.estado_pago || '').toUpperCase() === 'N/C') return 'No aplica';
   return ['PAGADO','PARCIAL'].includes(String(r.estado_pago || '').toUpperCase()) ? 'Sin movimiento' : 'No pagada';
@@ -1763,7 +1769,7 @@ async function cuyAplGuardar(m, r, importe){
   const c = {}, sal = cuySaldoFac(r), est = String(r.estado_pago || '').toUpperCase();
   if (importe != null && !r.cuenta) c.cuenta = m.cuenta;
   if (importe != null && (!r.fecha_pago || r.fecha_pago < m.fecha)) c.fecha_pago = m.fecha;   // fecha del último pago
-  if (cuyAplDeComp(r.id).length && sal != null && ['', 'PENDIENTE', 'PARCIAL', 'PAGADO'].includes(est)) c.estado_pago = Math.abs(sal) <= 0.01 ? 'PAGADO' : 'PARCIAL';
+  if (cuyAplDeComp(r.id).length && sal != null && ['', 'PENDIENTE', 'PARCIAL', 'PAGADO'].includes(est)) c.estado_pago = Math.abs(sal) <= cuyTolFac(r) ? 'PAGADO' : 'PARCIAL';
   if (Object.keys(c).length) await cuyUpdate(r.id, c);
 }
 function cuyVincular(mid){
