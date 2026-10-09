@@ -20,5 +20,8 @@ Solapas:
   SQL (en orden): `sql/2026-10_contabilidad_uy_conciliacion.sql`, `sql/2026-10_contabilidad_uy_diccionario.sql`,
   `sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql`, `_aplicaciones`, `_usd_oficial`, `_contrapartida`,
   `_imputacion_factura`, `_usd_billete`, `_ajuste_cierre`, `_proveedores`, `_clientes` (todos `sql/2026-10_contabilidad_uy_*.sql`).
+- **Tareas** (menú lateral): quién asigna a quién, fecha, vencimiento, estado (pendiente / en curso / hecha), adjuntos y
+  comentarios. Los supervisores (tabla `adminfin_tareas_supervisores`) ven todas; el resto, las que le asignaron o creó.
+  SQL: `sql/2026-10_tareas.sql` (tablas, bucket privado `adminfin-tareas` y permisos).
 Diseño: mismo sistema visual que `4housing-compras` y `4housing-eerr` (paleta oliva,
 Archivo/Quicksand, sidebar oscuro, cards, tablas `.grid`, badges y modales).

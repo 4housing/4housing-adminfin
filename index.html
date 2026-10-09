@@ -208,6 +208,7 @@ table.grid td input.tc-in.vacio{border-color:#e0ab3f;background:#fffaf0;}
       <div class="nav-group-lbl">Finanzas</div>
       <button class="navbtn active" type="button" data-vista="sol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2.5h9l3 3v16h-12z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span>Solicitudes de pago</span></button>
       <button class="navbtn" type="button" data-vista="cuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4.5h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3z"/><path d="M4 17.5a3 3 0 0 1 3-3h11"/><path d="M8 8.5h6M8 11.5h4"/></svg><span>Contabilidad UY</span></button>
+      <button class="navbtn" type="button" data-vista="tar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/></svg><span>Tareas</span></button>
     </nav>
     <div class="sp"></div>
     <div class="data-actions">
@@ -295,7 +296,8 @@ function vistaApp(perfil, cargo){
   document.getElementById('who-nombre').textContent = (perfil.nombre || perfil.email || '') + (cargo ? ' · ' + cargo : '');
   // Mismo criterio que public.puede_editar_sector(): los cargos lector/lectura solo ven.
   SP.editar = !!perfil.es_direccion || !['lector','lectura'].includes(String(cargo || '').toLowerCase());
-  irVista(location.hash === '#contabilidad-uy' ? 'cuy' : 'sol');
+  SP.uid = perfil.id;
+  irVista(location.hash === '#contabilidad-uy' ? 'cuy' : location.hash === '#tareas' ? 'tar' : 'sol');
   spCargar();
 }
 
@@ -304,6 +306,7 @@ let VISTA = 'sol';
 const VISTAS = {
   sol: { titulo:'Solicitudes de pago', sub:'Pedidos de Compras a Finanzas e informes de Tango', hash:'' },
   cuy: { titulo:'Contabilidad UY', sub:'Facturas (CFE) recibidas por Avance Oriental SAS · RUT 220754030013 · montos en pesos uruguayos', hash:'#contabilidad-uy' },
+  tar: { titulo:'Tareas', sub:'Quién asigna a quién, vencimientos, adjuntos y comentarios', hash:'#tareas' },
 };
 function irVista(v){
   VISTA = VISTAS[v] ? v : 'sol';
@@ -311,10 +314,172 @@ function irVista(v){
   document.getElementById('pageTitle').textContent = VISTAS[VISTA].titulo;
   document.getElementById('pageSub').textContent = VISTAS[VISTA].sub;
   try { history.replaceState(null, '', location.pathname + location.search + VISTAS[VISTA].hash); } catch(e) {}
+  if (VISTA === 'tar') { if (!TAR.cargado) { document.getElementById('topActions').innerHTML = ''; $main.innerHTML = '<div class="empty">Cargando…</div>'; tarCargar(); } else tarRender(); return; }
   if (VISTA === 'cuy' && !CUY.cargado) { document.getElementById('topActions').innerHTML = ''; $main.innerHTML = '<div class="empty">Cargando…</div>'; cuyCargar(); return; }
   spRender();
 }
 document.querySelectorAll('#nav .navbtn').forEach(b => b.addEventListener('click', () => irVista(b.dataset.vista)));
+
+/* ==========================================================================
+   Tareas: quién asigna a quién, fecha, vencimiento, estado, adjuntos y comentarios.
+   Tablas: sql/2026-10_tareas.sql (adminfin_tareas, _comentarios, _adjuntos, _supervisores; bucket adminfin-tareas).
+   Los supervisores ven todas; el resto, las que le asignaron o las que creó (lo controla la base, RLS).
+   ========================================================================== */
+const TAR_T = 'adminfin_tareas', TAR_COM_T = 'adminfin_tareas_comentarios', TAR_ADJ_T = 'adminfin_tareas_adjuntos', TAR_BUCKET = 'adminfin-tareas';
+const TAR = { cargado:false, err:'', lista:[], com:[], adj:[], usuarios:[], sup:false, vista:null, estado:'abiertas' };
+const TAR_EST = { pendiente:'Pendiente', en_curso:'En curso', hecha:'Hecha' };
+const TAR_BADGE = { pendiente:'b-ambar', en_curso:'b-azul', hecha:'b-verde' };
+const tarNom = id => { const u = TAR.usuarios.find(x => x.id === id); return u ? (u.nombre || u.email) : (id === SP.uid ? 'Yo' : '—'); };
+const tarVencida = t => t.estado !== 'hecha' && t.vencimiento && String(t.vencimiento) < hoyISO();
+const tarPuedeEditar = t => TAR.sup || t.asignado_por === SP.uid;
+async function tarCargar(){
+  try {
+    const [lista, com, adj, us, sup] = await Promise.all([selTodo(TAR_T, '*', 'id'), selTodo(TAR_COM_T, '*', 'id'), selTodo(TAR_ADJ_T, '*', 'id'),
+      sb.rpc('adminfin_tareas_usuarios'), sb.rpc('adminfin_tareas_es_supervisor')]);
+    if (us.error) throw us.error; if (sup.error) throw sup.error;
+    Object.assign(TAR, { lista, com, adj, usuarios: us.data || [], sup: !!sup.data, err:'', cargado:true });
+    if (!TAR.vista) TAR.vista = TAR.sup ? 'todas' : 'mias';
+  } catch (e) { TAR.err = e.message || String(e); TAR.cargado = true; }
+  if (VISTA === 'tar') tarRender();
+}
+function tarRender(){
+  const ta = document.getElementById('topActions');
+  ta.innerHTML = SP.editar && !TAR.err ? '<button class="btn" id="tr-nueva">' + ICO.plus + 'Nueva tarea</button>' : '';
+  if (TAR.err) { $main.innerHTML = '<div class="card"><div class="empty">No pude leer las tareas: ' + esc(TAR.err) + '<br><span class="muted">Falta correr sql/2026-10_tareas.sql en Supabase.</span></div></div>'; return; }
+  const mias = TAR.lista.filter(t => t.asignado_a === SP.uid), creadas = TAR.lista.filter(t => t.asignado_por === SP.uid);
+  const abiertas = xs => xs.filter(t => t.estado !== 'hecha');
+  const base = TAR.vista === 'mias' ? mias : TAR.vista === 'creadas' ? creadas : TAR.lista;
+  const filas = base.filter(t => TAR.estado === 'todas' ? true : TAR.estado === 'hechas' ? t.estado === 'hecha' : t.estado !== 'hecha');
+  const nCom = id => TAR.com.filter(c => c.tarea_id === id).length, nAdj = id => TAR.adj.filter(a => a.tarea_id === id).length;
+  const cols = [
+    { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? '<div class="muted" style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.descripcion) + '</div>' : '') },
+    { id:'por', t:'Asignada por', v:t => tarNom(t.asignado_por), td:t => esc(tarNom(t.asignado_por)) },
+    { id:'a', t:'Asignada a', v:t => tarNom(t.asignado_a), td:t => '<b>' + esc(tarNom(t.asignado_a)) + '</b>' },
+    { id:'fecha', t:'Fecha', fecha:t => t.fecha, td:t => fmtFecha(t.fecha) },
+    { id:'vence', t:'Vence', fecha:t => t.vencimiento, td:t => t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtFecha(t.vencimiento) + '</b> · vencida</span>' : fmtFecha(t.vencimiento)) : '<span class="muted">—</span>' },
+    { id:'est', t:'Estado', v:t => TAR_EST[t.estado] || t.estado, td:t => '<span class="badge ' + (tarVencida(t) ? 'b-rojo' : TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(TAR_EST[t.estado] || t.estado) + '</span>' },
+    { id:'adj', t:'Adjuntos', s:t => nAdj(t.id), cls:'num', td:t => nAdj(t.id) ? '📎 ' + nAdj(t.id) : '<span class="muted">—</span>' },
+    { id:'com', t:'Comentarios', s:t => nCom(t.id), cls:'num', td:t => nCom(t.id) ? '💬 ' + nCom(t.id) : '<span class="muted">—</span>' },
+    { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
+  ];
+  TABLAS.tar = { cols, base: () => filas };
+  const f = tablaFiltrar('tar', cols, filas, t => [t.titulo, t.descripcion, tarNom(t.asignado_por), tarNom(t.asignado_a)].join(' '));
+  const kpi = (l, v, sub, warn) => '<div class="kpi"><div class="kpi-label">' + l + '</div><div class="kpi-value' + (warn ? ' warn' : '') + '">' + v + '</div><div class="kpi-sub">' + sub + '</div></div>';
+  const btn = (id, l, n) => '<button class="mtab' + (TAR.vista === id ? ' active' : '') + '" data-tr-vista="' + id + '">' + l + ' (' + n + ')</button>';
+  $main.innerHTML = '<div class="kpi-grid">'
+    + kpi('Asignadas a mí', abiertas(mias).length, 'abiertas · ' + abiertas(mias).filter(tarVencida).length + ' vencidas', abiertas(mias).some(tarVencida))
+    + kpi('Creadas por mí', abiertas(creadas).length, 'abiertas · ' + abiertas(creadas).filter(tarVencida).length + ' vencidas')
+    + (TAR.sup ? kpi('Todas', abiertas(TAR.lista).length, 'abiertas · ' + abiertas(TAR.lista).filter(tarVencida).length + ' vencidas', abiertas(TAR.lista).some(tarVencida)) : '')
+    + '</div>'
+    + '<div class="mtabs" style="margin:4px 0 14px">' + btn('mias', 'Asignadas a mí', mias.length) + btn('creadas', 'Creadas por mí', creadas.length) + (TAR.sup ? btn('todas', 'Todas', TAR.lista.length) : '') + '</div>'
+    + '<div class="card">' + cardH('Tareas', TAR.sup ? 'Ves todas las tareas (supervisión).' : 'Ves las tareas que te asignaron y las que creaste.')
+    + '<div class="tools" style="padding-bottom:0"><span style="font-size:12px;color:var(--muted)">Mostrar</span><select class="tc-in" style="width:auto;text-align:left" id="tr-est">'
+    + [['abiertas','Abiertas (pendientes y en curso)'], ['hechas','Hechas'], ['todas','Todas']].map(([k,l]) => '<option value="' + k + '"' + (TAR.estado === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>'
+    + (filas.length ? tablaHerramientas('tar', 'Buscar título, descripción, persona…') + tablaHtml('tar', cols, f, '', t => tarVencida(t) ? 'revisar' : '') : '<div class="empty">No hay tareas para mostrar.</div>') + '</div>';
+  tablaEventos();
+  const b0 = document.getElementById('tr-nueva'); if (b0) b0.addEventListener('click', () => tarForm(null));
+  document.getElementById('tr-est').addEventListener('change', e => { TAR.estado = e.target.value; tarRender(); });
+  $main.querySelectorAll('[data-tr-vista]').forEach(b => b.addEventListener('click', () => { TAR.vista = b.dataset.trVista; tarRender(); }));
+  $main.querySelectorAll('[data-tr-ver]').forEach(b => b.addEventListener('click', () => tarDetalle(+b.dataset.trVer)));
+}
+const tarOpcUsuarios = sel => TAR.usuarios.map(u => '<option value="' + esc(u.id) + '"' + (u.id === sel ? ' selected' : '') + '>' + esc(u.nombre || u.email) + (u.nombre && u.email ? ' · ' + esc(u.email) : '') + '</option>').join('');
+async function tarSubir(tareaId, files){
+  let ok = 0, err = '';
+  for (const f of files) {
+    const path = tareaId + '/' + Date.now() + '_' + f.name.replace(/[^\w.\-]+/g, '_');
+    const up = await sb.storage.from(TAR_BUCKET).upload(path, f, { upsert:false });
+    if (up.error) { err = up.error.message; continue; }
+    const { data, error } = await sb.from(TAR_ADJ_T).insert({ tarea_id: tareaId, path, nombre: f.name, tamano: f.size, subido_por: SP.uid }).select();
+    if (error) { err = error.message; await sb.storage.from(TAR_BUCKET).remove([path]); continue; }
+    TAR.adj.push(data[0]); ok++;
+  }
+  return { ok, err };
+}
+function tarForm(id){
+  const t0 = id ? TAR.lista.find(t => t.id === id) : null, c = t0 || { fecha: hoyISO(), estado:'pendiente' };
+  const inp = (i, l, v, x) => '<div class="field"><label>' + l + '</label><input id="' + i + '" value="' + esc(v == null ? '' : v) + '"' + (x || '') + '></div>';
+  abrirModal(t0 ? 'Editar tarea' : 'Nueva tarea',
+    '<div class="frow">' + inp('tf-tit', 'Título *', c.titulo, ' placeholder="Ej. Cargar facturas de octubre"') + '</div>'
+    + '<div class="frow c3"><div class="field"><label>Asignar a *</label><select id="tf-a"><option value="">Elegí…</option>' + tarOpcUsuarios(c.asignado_a) + '</select></div>'
+    + inp('tf-fecha', 'Fecha', c.fecha, ' type="date"') + inp('tf-vence', 'Vencimiento', c.vencimiento, ' type="date"') + '</div>'
+    + '<div class="frow"><div class="field"><label>Descripción</label><textarea id="tf-desc" rows="4" placeholder="Qué hay que hacer, links, datos…">' + esc(c.descripcion || '') + '</textarea></div></div>'
+    + (t0 ? '' : '<div class="frow"><div class="field"><label>Adjuntos (opcional)</label><input type="file" id="tf-files" multiple></div></div>')
+    + '<div class="err" id="tf-err"></div>',
+    '<button class="btn ghost" id="tf-no">Cancelar</button><button class="btn" id="tf-ok">' + (t0 ? 'Guardar' : 'Crear tarea') + '</button>', 'wide');
+  const $ = i => document.getElementById(i), v = i => $(i).value.trim();
+  $('tf-no').addEventListener('click', () => t0 ? tarDetalle(t0.id) : cerrarModal());
+  $('tf-ok').addEventListener('click', async () => {
+    const err = $('tf-err'); err.textContent = '';
+    if (!v('tf-tit') || !v('tf-a')) { err.textContent = 'Título y "Asignar a" son obligatorios.'; return; }
+    if (v('tf-vence') && v('tf-fecha') && v('tf-vence') < v('tf-fecha')) { err.textContent = 'El vencimiento es anterior a la fecha.'; return; }
+    const fila = { titulo: v('tf-tit'), asignado_a: v('tf-a'), fecha: v('tf-fecha') || hoyISO(), vencimiento: v('tf-vence') || null, descripcion: v('tf-desc') || null };
+    $('tf-ok').disabled = true;
+    try {
+      let t;
+      if (t0) { const { data, error } = await sb.from(TAR_T).update(fila).eq('id', t0.id).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso para editarla.'); t = data[0]; TAR.lista[TAR.lista.indexOf(t0)] = t; }
+      else { const { data, error } = await sb.from(TAR_T).insert(Object.assign(fila, { asignado_por: SP.uid, estado: 'pendiente' })).select(); if (error) throw error; t = data[0]; TAR.lista.push(t); }
+      let extra = '';
+      const files = !t0 && $('tf-files') ? [...$('tf-files').files] : [];
+      if (files.length) { const r = await tarSubir(t.id, files); extra = ' · ' + r.ok + ' adjunto(s)' + (r.err ? ' · ⚠ ' + r.err : ''); }
+      toast((t0 ? 'Tarea guardada' : 'Tarea creada') + extra); tarRender(); tarDetalle(t.id);
+    } catch (e) { err.textContent = 'Error: ' + (e.message || e); $('tf-ok').disabled = false; }
+  });
+}
+function tarDetalle(id){
+  const t = TAR.lista.find(x => x.id === id); if (!t) return;
+  const edita = tarPuedeEditar(t), cambiaEstado = edita || t.asignado_a === SP.uid;
+  const coms = TAR.com.filter(c => c.tarea_id === id).sort((a,b) => String(a.creado_en).localeCompare(String(b.creado_en)));
+  const adjs = TAR.adj.filter(a => a.tarea_id === id);
+  const cuandoT = ts => { const d = new Date(ts); return isNaN(d) ? '' : d.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
+  const kb = n => n == null ? '' : n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  abrirModal(t.titulo,
+    '<div class="frow c3"><div><div class="muted" style="font-size:11px">ASIGNADA POR</div><b>' + esc(tarNom(t.asignado_por)) + '</b></div>'
+    + '<div><div class="muted" style="font-size:11px">ASIGNADA A</div><b>' + esc(tarNom(t.asignado_a)) + '</b></div>'
+    + '<div><div class="muted" style="font-size:11px">FECHA · VENCE</div>' + fmtFecha(t.fecha) + ' · ' + (t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtFecha(t.vencimiento) + ' (vencida)</b></span>' : fmtFecha(t.vencimiento)) : '—') + '</div></div>'
+    + '<div class="frow" style="margin-top:10px"><div class="field"><label>Estado</label>' + (cambiaEstado
+        ? '<select id="td-est" style="max-width:220px">' + Object.entries(TAR_EST).map(([k,l]) => '<option value="' + k + '"' + (t.estado === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>'
+        : '<span class="badge ' + (TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(TAR_EST[t.estado]) + '</span>') + (t.completada_en ? ' <span class="muted" style="font-size:12px">hecha el ' + cuandoT(t.completada_en) + '</span>' : '') + '</div></div>'
+    + (t.descripcion ? '<div class="box" style="white-space:pre-wrap;margin:6px 0 12px">' + esc(t.descripcion) + '</div>' : '')
+    + '<h4 style="margin:12px 0 6px">Adjuntos (' + adjs.length + ')</h4>'
+    + (adjs.length ? '<div class="hist" style="max-height:180px">' + adjs.map(a => '<div class="it">📎 <a href="#" data-td-bajar="' + a.id + '">' + esc(a.nombre) + '</a> <span class="muted">' + kb(a.tamano) + ' · ' + esc(tarNom(a.subido_por)) + ' · ' + cuandoT(a.creado_en) + '</span>'
+        + ((a.subido_por === SP.uid || TAR.sup) ? ' <button class="iconbtn del" title="Quitar" data-td-adel="' + a.id + '">' + ICO.del + '</button>' : '') + '</div>').join('') + '</div>' : '<div class="muted" style="font-size:12.5px">Sin adjuntos.</div>')
+    + '<div style="margin:6px 0 12px"><input type="file" id="td-files" multiple> <button class="btn ghost sm" id="td-subir">Subir</button></div>'
+    + '<h4 style="margin:12px 0 6px">Comentarios (' + coms.length + ')</h4>'
+    + (coms.length ? '<div class="hist" style="max-height:260px">' + coms.map(c => '<div class="it" style="white-space:pre-wrap">' + esc(c.texto) + '<div class="muted" style="margin-top:2px">' + esc(tarNom(c.autor)) + ' · ' + cuandoT(c.creado_en) + '</div></div>').join('') + '</div>' : '<div class="muted" style="font-size:12.5px">Sin comentarios todavía.</div>')
+    + '<div class="field" style="margin-top:8px"><textarea id="td-com" rows="2" placeholder="Escribí un comentario…"></textarea></div><button class="btn ghost sm" id="td-comentar">Comentar</button>'
+    + '<div class="err" id="td-err"></div>',
+    (edita ? '<button class="btn ghost" id="td-del" style="margin-right:auto">Eliminar</button><button class="btn ghost" id="td-editar">Editar</button>' : '') + '<button class="btn" id="td-cerrar">Cerrar</button>', 'wide');
+  const $ = i => document.getElementById(i), err = m => { $('td-err').textContent = m; };
+  $('td-cerrar').addEventListener('click', cerrarModal);
+  if ($('td-editar')) $('td-editar').addEventListener('click', () => tarForm(id));
+  if ($('td-del')) $('td-del').addEventListener('click', async () => {
+    if (!confirm('¿Eliminar la tarea "' + t.titulo + '" con sus comentarios y adjuntos?')) return;
+    try { const paths = adjs.map(a => a.path); if (paths.length) await sb.storage.from(TAR_BUCKET).remove(paths);
+      const { error } = await sb.from(TAR_T).delete().eq('id', id); if (error) throw error;
+      TAR.lista = TAR.lista.filter(x => x.id !== id); TAR.com = TAR.com.filter(c => c.tarea_id !== id); TAR.adj = TAR.adj.filter(a => a.tarea_id !== id);
+      cerrarModal(); toast('Tarea eliminada'); tarRender(); } catch (e) { err('No se pudo: ' + (e.message || e)); } });
+  if ($('td-est')) $('td-est').addEventListener('change', async e => {
+    try { const { data, error } = await sb.from(TAR_T).update({ estado: e.target.value }).eq('id', id).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso.');
+      TAR.lista[TAR.lista.indexOf(t)] = data[0]; toast('Estado: ' + TAR_EST[data[0].estado]); tarRender(); tarDetalle(id); } catch (x) { err('No se guardó: ' + (x.message || x)); } });
+  $('td-comentar').addEventListener('click', async () => {
+    const texto = $('td-com').value.trim(); if (!texto) return;
+    try { const { data, error } = await sb.from(TAR_COM_T).insert({ tarea_id: id, texto, autor: SP.uid }).select(); if (error) throw error;
+      TAR.com.push(data[0]); tarRender(); tarDetalle(id); } catch (x) { err('No se guardó: ' + (x.message || x)); } });
+  $('td-subir').addEventListener('click', async () => {
+    const files = [...$('td-files').files]; if (!files.length) { err('Elegí uno o más archivos.'); return; }
+    $('td-subir').disabled = true; const r = await tarSubir(id, files);
+    toast(r.ok + ' adjunto(s) subido(s)' + (r.err ? ' · ⚠ ' + r.err : '')); tarRender(); tarDetalle(id); });
+  $main.ownerDocument.querySelectorAll('[data-td-bajar]').forEach(a => a.addEventListener('click', async e => {
+    e.preventDefault(); const x = TAR.adj.find(y => y.id === +a.dataset.tdBajar); if (!x) return;
+    const w = window.open('', '_blank');
+    const { data, error } = await sb.storage.from(TAR_BUCKET).createSignedUrl(x.path, 3600);
+    if (error || !data) { if (w) w.close(); err('No pude abrir el archivo: ' + ((error && error.message) || 'sin permiso')); return; }
+    if (w) w.location = data.signedUrl; else window.location = data.signedUrl; }));
+  $main.ownerDocument.querySelectorAll('[data-td-adel]').forEach(b => b.addEventListener('click', async () => {
+    const x = TAR.adj.find(y => y.id === +b.dataset.tdAdel); if (!x || !confirm('¿Quitar ' + x.nombre + '?')) return;
+    try { const { error } = await sb.from(TAR_ADJ_T).delete().eq('id', x.id); if (error) throw error; await sb.storage.from(TAR_BUCKET).remove([x.path]);
+      TAR.adj = TAR.adj.filter(y => y.id !== x.id); tarRender(); tarDetalle(id); } catch (e) { err('No se pudo: ' + (e.message || e)); } }));
+}
 
 /* ==========================================================================
    Solicitudes de pago — misma solapa que en la app de Compras (4housing-compras),
@@ -569,7 +734,7 @@ function colAnchos(table){
 
 /* ---------- Pantalla ---------- */
 // Todas las tablas llaman a spRender() al filtrar/ordenar: dibuja la solapa activa.
-function spRender(){ if (VISTA === 'cuy') cuyRender(); else if (SP.cargado) spRenderSol(); else $main.innerHTML = '<div class="empty">Cargando…</div>'; }
+function spRender(){ if (VISTA === 'tar') tarRender(); else if (VISTA === 'cuy') cuyRender(); else if (SP.cargado) spRenderSol(); else $main.innerHTML = '<div class="empty">Cargando…</div>'; }
 function spRenderSol(){
   const tab = (id, l) => '<button class="mtab' + (SP.tab === id ? ' active' : '') + '" data-tab="' + id + '">' + l + '</button>';
   // Carga de informes: arriba a la derecha, como los botones de acción de la topbar de Compras
