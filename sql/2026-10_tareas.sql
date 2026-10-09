@@ -65,29 +65,35 @@ create table if not exists public.adminfin_tareas_adjuntos (
 );
 create index if not exists adminfin_tareas_adj_tarea on public.adminfin_tareas_adjuntos (tarea_id);
 
+-- (plpgsql: el cuerpo se valida al usarse, no al crearse; así no depende del orden en que el editor ejecute el script)
 -- ¿El usuario actual es supervisor (ve todas las tareas)?
 create or replace function public.adminfin_tareas_es_supervisor() returns boolean
-language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.adminfin_tareas_supervisores s join public.perfiles p on lower(p.email) = lower(s.email)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  return exists (select 1 from public.adminfin_tareas_supervisores s join public.perfiles p on lower(p.email) = lower(s.email)
                  where p.id = auth.uid());
-$$;
+end $$;
 
 -- ¿El usuario actual puede ver la tarea? (supervisor, asignado o quien la creó)
 create or replace function public.adminfin_tarea_visible(p_tarea bigint) returns boolean
-language sql stable security definer set search_path = public as $$
-  select public.tiene_sector('adminfin'::public.sector_portal) and exists (
+language plpgsql stable security definer set search_path = public as $$
+begin
+  return public.tiene_sector('adminfin'::public.sector_portal) and exists (
     select 1 from public.adminfin_tareas t where t.id = p_tarea
       and (public.adminfin_tareas_es_supervisor() or t.asignado_a = auth.uid() or t.asignado_por = auth.uid()));
-$$;
+end $$;
 
 -- Personas del sector Adm. y Finanzas (y dirección), para elegir a quién asignar
 create or replace function public.adminfin_tareas_usuarios() returns table (id uuid, nombre text, email text)
-language sql stable security definer set search_path = public as $$
-  select p.id, p.nombre, p.email from public.perfiles p
-   where public.tiene_sector('adminfin'::public.sector_portal) and p.activo
-     and (p.es_direccion or exists (select 1 from public.perfiles_sector ps where ps.perfil_id = p.id and ps.sector = 'adminfin'::public.sector_portal))
-   order by coalesce(p.nombre, p.email);
-$$;
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.tiene_sector('adminfin'::public.sector_portal) then return; end if;
+  return query
+    select p.id, p.nombre::text, p.email::text from public.perfiles p
+     where p.activo
+       and (p.es_direccion or exists (select 1 from public.perfiles_sector ps where ps.perfil_id = p.id and ps.sector = 'adminfin'::public.sector_portal))
+     order by coalesce(p.nombre, p.email);
+end $$;
 
 -- Fecha de actualización / de cierre automáticas
 create or replace function public.adminfin_tareas_touch() returns trigger language plpgsql as $$
