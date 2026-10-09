@@ -1164,7 +1164,7 @@ function cuyForm(id, preset){
   abrirModal(r ? 'Editar comprobante · ' + (r.serie_numero || r.id) : (preset && cuyEsEfectivo(preset.cuenta) ? 'Factura pagada en efectivo' : 'Nuevo comprobante'), body,
     '<button class="btn ghost" id="cf-cerrar">Cancelar</button><button class="btn" id="cf-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i);
-  $('cf-cerrar').addEventListener('click', cerrarModal);
+  $('cf-cerrar').addEventListener('click', cerrarModal); cuyListaCompleta('cf-proy');
   // Diccionario de proveedores: nombre, código o RUT completan los demás (y lo habitual si está vacío)
   if (CUY.provs.length) {
     const box = document.createElement('datalist'); box.id = 'dl-pcod'; box.innerHTML = CUY.provs.map(p => '<option value="' + esc(p.codigo) + '">' + esc(p.nombre) + '</option>').join(''); $('cf-cod').after(box);
@@ -1856,7 +1856,7 @@ function cuyMovForm(id, preset){
     + '<div class="err" id="mf-err"></div>',
     '<button class="btn ghost" id="mf-no">Cancelar</button><button class="btn" id="mf-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i), v = i => $(i).value.trim(), n = i => v(i) === '' ? null : +v(i);
-  $('mf-no').addEventListener('click', cerrarModal);
+  $('mf-no').addEventListener('click', cerrarModal); cuyListaCompleta('mf-aux');
   $('mf-ok').addEventListener('click', async () => {
     const err = $('mf-err'); err.textContent = '';
     if (!v('mf-fecha')) { err.textContent = 'Poné la fecha.'; return; }
@@ -2047,6 +2047,13 @@ function cuyConcExportar(cn){
 // Cada asiento: { id, fecha, mon, tc, concepto, lineas:[{ clave, monto (+ debe / − haber), leyenda, eerr, proy }] }
 // Opciones de Auxiliar / proyecto: todos los instructivos de fabricación habilitados del diccionario de Tango (PL…, IF…, INV…)
 // más los que ya se usaron. Texto "PL0078 MANUEL ARAOZ": el código se toma del principio.
+// El navegador filtra la lista por lo que ya está escrito: al entrar al campo se vacía (queda como guía en gris) para ver
+// todas las opciones; si salís sin elegir nada, vuelve el valor anterior.
+function cuyListaCompleta(id){
+  const i = document.getElementById(id); if (!i) return;
+  i.addEventListener('focus', () => { if (i.value) { i.dataset.prev = i.value; i.placeholder = i.value; i.value = ''; } });
+  i.addEventListener('blur', () => { if (!i.value && i.dataset.prev) i.value = i.dataset.prev; delete i.dataset.prev; });
+}
 const cuyProyOpciones = usados => ((CUY.dic && CUY.dic.proy) || []).filter(o => o.habil !== 'No' && cuyProyCod(o.cod))
   .map(o => fold(o.desc).startsWith(fold(o.cod)) ? o.desc : o.cod + ' ' + o.desc).concat(usados || []);
 const cuyProyCod = t => { const m = String(t || '').trim().match(/^(PL\d+|IF\s?\d+|INV\d+)/i); return m ? m[1].toUpperCase().replace(/\s/g,'') : ''; };
@@ -3020,7 +3027,7 @@ function cuyProvForm(cod, preset){
     + '<datalist id="dl-pv-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist><div class="err" id="pv-err"></div>',
     '<button class="btn ghost" id="pv-no">Cancelar</button><button class="btn" id="pv-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i), v = i => $(i).value.trim();
-  $('pv-no').addEventListener('click', cerrarModal);
+  $('pv-no').addEventListener('click', cerrarModal); cuyListaCompleta('pv-proy');
   $('pv-ok').addEventListener('click', async () => {
     const codigo = (p0 ? p0.codigo : v('pv-cod')).toUpperCase(), err = $('pv-err');
     if (!codigo || !v('pv-nom')) { err.textContent = 'Código y razón social son obligatorios.'; return; }
