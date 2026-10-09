@@ -291,14 +291,33 @@ function vistaSinSector(perfil){
     'Cerrar sesión', salir);
 }
 
-function vistaApp(perfil, cargo){
+// Permisos por sección (pantalla Usuarios del portal → perfiles_sector.permisos, SECCIONES.adminfin de portal/admin.html).
+// Mismo criterio que el portal y que public.adminfin_puede_ver / _editar: dirección = todo; sin listas guardadas = ve
+// todo salvo "tareas_todas" y edita según el cargo (Solo visión no edita, "editor" solo lo tildado).
+const ADMINFIN_SECCIONES = ['solicitudes', 'cuy', 'tareas', 'tareas_todas'];
+const VISTA_SECCION = { sol:'solicitudes', cuy:'cuy', tar:'tareas' };
+const PERM = { ver:new Set(), editar:new Set() };
+function permisosAdminfin(perfil, fila){
+  if (perfil.es_direccion) { ADMINFIN_SECCIONES.forEach(x => { PERM.ver.add(x); PERM.editar.add(x); }); return; }
+  const pm = (fila && fila.permisos) || {}, cargo = String((fila && fila.cargo) || '').toLowerCase();
+  const ver = Array.isArray(pm.ver) ? pm.ver : ADMINFIN_SECCIONES.filter(x => x !== 'tareas_todas');
+  const soloVer = ['lector','lectura'].includes(cargo);
+  const editar = soloVer ? [] : Array.isArray(pm.editar) ? pm.editar : (cargo === 'editor' ? [] : ADMINFIN_SECCIONES.filter(x => x !== 'tareas_todas'));
+  ver.forEach(x => PERM.ver.add(x)); editar.filter(x => PERM.ver.has(x)).forEach(x => PERM.editar.add(x));
+}
+const puedeVerVista = v => PERM.ver.has(VISTA_SECCION[v]);
+function vistaApp(perfil, cargo, fila){
   $gate.hidden = true; $app.hidden = false;
   document.getElementById('who-nombre').textContent = (perfil.nombre || perfil.email || '') + (cargo ? ' · ' + cargo : '');
-  // Mismo criterio que public.puede_editar_sector(): los cargos lector/lectura solo ven.
-  SP.editar = !!perfil.es_direccion || !['lector','lectura'].includes(String(cargo || '').toLowerCase());
+  permisosAdminfin(perfil, fila);
   SP.uid = perfil.id;
-  irVista(location.hash === '#contabilidad-uy' ? 'cuy' : location.hash === '#tareas' ? 'tar' : 'sol');
-  spCargar();
+  // solo las solapas habilitadas en el portal
+  document.querySelectorAll('#nav .navbtn').forEach(b => { b.hidden = !puedeVerVista(b.dataset.vista); });
+  const pedida = location.hash === '#contabilidad-uy' ? 'cuy' : location.hash === '#tareas' ? 'tar' : 'sol';
+  const v = puedeVerVista(pedida) ? pedida : ['sol', 'cuy', 'tar'].find(puedeVerVista);
+  if (!v) { pantallaAcceso('Tu usuario (<b>' + esc(perfil.nombre || perfil.email) + '</b>) tiene acceso a Administración y Finanzas pero ninguna sección habilitada.<br><span style="font-size:12px;color:var(--muted)">Pedile a dirección que te tilde las secciones en la pantalla de Usuarios del portal.</span>', 'Cerrar sesión', salir); return; }
+  irVista(v);
+  if (PERM.ver.has('solicitudes')) spCargar();
 }
 
 /* ---------- Navegación entre solapas del menú lateral ---------- */
@@ -309,7 +328,8 @@ const VISTAS = {
   tar: { titulo:'Tareas', sub:'Quién asigna a quién, vencimientos, adjuntos y comentarios', hash:'#tareas' },
 };
 function irVista(v){
-  VISTA = VISTAS[v] ? v : 'sol';
+  VISTA = VISTAS[v] && puedeVerVista(v) ? v : (['sol', 'cuy', 'tar'].find(puedeVerVista) || 'sol');
+  SP.editar = PERM.editar.has(VISTA_SECCION[VISTA]);   // editar según el tilde de la sección en el portal
   document.querySelectorAll('#nav .navbtn').forEach(b => b.classList.toggle('active', b.dataset.vista === VISTA));
   document.getElementById('pageTitle').textContent = VISTAS[VISTA].titulo;
   document.getElementById('pageSub').textContent = VISTAS[VISTA].sub;
@@ -3461,7 +3481,7 @@ async function iniciar(){
   const propio = (sectores || []).find(s => s.sector === SECTOR);
   if (!perfil.es_direccion && !propio) { vistaSinSector(perfil); return; }
 
-  vistaApp(perfil, perfil.es_direccion ? 'dirección' : (propio && propio.cargo));
+  vistaApp(perfil, perfil.es_direccion ? 'dirección' : (propio && propio.cargo), propio);
 }
 
 iniciar();
