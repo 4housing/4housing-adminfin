@@ -2400,7 +2400,7 @@ function cuyAjPrevios(cuenta, mes){   // ajustes guardados de meses anteriores: 
     usd += u; ars += u * (cuyNum(a.tc_cierre) || 0) + (cuyNum(a.ajuste_ars) || 0); } });
   return { usd: r2(usd), ars: r2(ars) };
 }
-const CUY_AJ_SIN_CENT = '2026-10';
+const CUY_AJ_SIN_CENT = '2026-09';
 function cuyCierreCalc(mes, tc, arsIn){
   CUY_ESP = cuyEspejos(); cuySerieArmar();
   const fin = cuyFinMes(mes), kU = cuyCotDe(cuySigMes(mes), 'uyu_usd'), bcu = kU ? kU.v : null;
@@ -2435,7 +2435,7 @@ function cuyCierreCalc(mes, tc, arsIn){
     f.codigo = cuyPlan(f.clave).codigo || '';
     const ai = arsIn && arsIn[f.cuenta]; f.arsTango = ai != null && ai !== '' && !isNaN(+ai) ? +ai : f.arsEst;
     f.ajUsd = f.usdReal == null ? null : r2(f.usdReal - f.usdReg);
-    // ±US$ 0,01 es redondeo (app vs. Tango): no se ajusta. Desde oct 2026: septiembre ya está en Tango con ese centavo (asiento 634).
+    // ±US$ 0,01 es redondeo (app vs. Tango): no se ajusta (desde sep 2026: el 634 se corrigió sin ese centavo).
     if (f.ajUsd != null && Math.abs(f.ajUsd) <= 0.01 && mes >= CUY_AJ_SIN_CENT) f.ajUsd = 0;
     f.arsCierre = f.usdReal == null || !tc ? null : r2(f.usdReal * tc);
     f.ajArs = f.ajUsd == null || f.arsCierre == null ? null : r2(f.arsCierre - (f.arsTango + f.ajUsd * tc));
