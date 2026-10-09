@@ -1155,7 +1155,7 @@ function cuyForm(id, preset){
     +   '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink)"><input type="checkbox" id="cf-anul"' + (c.anulada ? ' checked' : '') + ' style="width:auto"> Anulada</label></div><div></div></div>'
     + '<div class="frow"><div class="field"><label>Observaciones</label><textarea id="cf-obs" rows="2" placeholder="Algo a revisar (queda la fila en amarillo)">' + esc(c.observaciones || '') + '</textarea></div></div>'
     + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.provs.map(p => p.nombre).concat(CUY.lista.map(x => x.proveedor))) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
-    + dl('dl-proy', CUY.lista.map(x => x.proyecto)) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', CUY_CTAS.map(x => x.n).concat(CUY.lista.map(x => x.cuenta)))
+    + dl('dl-proy', cuyProyOpciones(CUY.lista.map(x => x.proyecto))) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', CUY_CTAS.map(x => x.n).concat(CUY.lista.map(x => x.cuenta)))
     + '<div class="box"><h4>Imputación contable</h4>'
     +   '<div class="frow c2">' + inp('cf-cgasto','Cuenta contable del gasto (Tango) *', c.cuenta_gasto, ' list="dl-cf-cta"') + inp('cf-ccontra','Contrapartida (Tango) — opcional', c.cuenta_contra, ' list="dl-cf-cta"') + '</div>'
     +   '<div id="cf-imp" style="margin-top:8px"></div></div>'
@@ -1357,7 +1357,9 @@ async function cuyCargarDic(){
   try {
     const [cu, op] = await Promise.all([selTodo('compras_cuentas_contables', 'cod, descripcion, habil, usa_aux', null), selTodo('compras_aux_opciones', 'tipo_cod, cod, descripcion, habil', null)]);
     CUY.dic = { cuentas: cu.map(c => ({ cod:String(c.cod).trim(), desc:c.descripcion || '', habil:c.habil, usa_aux:c.usa_aux })).sort((a,b) => a.cod.localeCompare(b.cod)),
-                eerr: op.filter(o => String(o.tipo_cod) === '2').map(o => ({ cod:String(o.cod).trim(), desc:o.descripcion || '', habil:o.habil })) };
+                eerr: op.filter(o => String(o.tipo_cod) === '2').map(o => ({ cod:String(o.cod).trim(), desc:o.descripcion || '', habil:o.habil })),
+                // aux. 03 instructivo de fabricación (proyectos PL…): para los desplegables de Auxiliar / proyecto
+                proy: op.filter(o => String(o.tipo_cod) === '3').map(o => ({ cod:String(o.cod).trim(), desc:o.descripcion || '', habil:o.habil })) };
     CUY.dicErr = CUY.dic.cuentas.length ? '' : 'el diccionario volvió vacío (¿falta correr sql/2026-10_contabilidad_uy_diccionario.sql?)';
   } catch (e) { CUY.dic = { cuentas:[], eerr:[] }; CUY.dicErr = e.message || String(e); }
 }
@@ -1850,7 +1852,7 @@ function cuyMovForm(id, preset){
     + '<datalist id="dl-mf-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist>'
     + '<div class="frow c2">' + inp('mf-com','Comentarios', c.comentarios) + inp('mf-asn','N° asiento Tango (si ya está registrado)', c.asiento_num, ' placeholder="vacío = pendiente de exportar"') + '</div>'
     + dl('dl-mclas', ['GASTOS BANCARIOS','ENTRE BANCOS','HONORARIOS','RETIRO BANCO','SMALL BALANCE'].concat(CUY.movs.map(x => x.clasificacion)))
-    + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', CUY.movs.map(x => x.auxiliar)) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.map(x => x.proveedor)))
+    + dl('dl-rubro2', CUY_RUBROS.concat(CUY.movs.map(x => x.rubro))) + dl('dl-maux', cuyProyOpciones(CUY.movs.map(x => x.auxiliar))) + dl('dl-mprov', CUY.lista.map(x => x.proveedor).concat(CUY.movs.map(x => x.proveedor)))
     + '<div class="err" id="mf-err"></div>',
     '<button class="btn ghost" id="mf-no">Cancelar</button><button class="btn" id="mf-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i), v = i => $(i).value.trim(), n = i => v(i) === '' ? null : +v(i);
@@ -2043,6 +2045,10 @@ function cuyConcExportar(cn){
 
 /* ---------- Asientos (formato importación Tango, igual que Tesorería) ---------- */
 // Cada asiento: { id, fecha, mon, tc, concepto, lineas:[{ clave, monto (+ debe / − haber), leyenda, eerr, proy }] }
+// Opciones de Auxiliar / proyecto: todos los instructivos de fabricación habilitados del diccionario de Tango (PL…, IF…, INV…)
+// más los que ya se usaron. Texto "PL0078 MANUEL ARAOZ": el código se toma del principio.
+const cuyProyOpciones = usados => ((CUY.dic && CUY.dic.proy) || []).filter(o => o.habil !== 'No' && cuyProyCod(o.cod))
+  .map(o => fold(o.desc).startsWith(fold(o.cod)) ? o.desc : o.cod + ' ' + o.desc).concat(usados || []);
 const cuyProyCod = t => { const m = String(t || '').trim().match(/^(PL\d+|IF\s?\d+|INV\d+)/i); return m ? m[1].toUpperCase().replace(/\s/g,'') : ''; };
 const cuyClaveRubro = r => 'RUBRO:' + (String(r || '').trim().toUpperCase() || '(SIN RUBRO)');
 const cuyClaveClasif = c => 'CLASIF:' + (String(c || '').trim().toUpperCase() || '(SIN CLASIFICACIÓN)');
@@ -3007,8 +3013,9 @@ function cuyProvForm(cod, preset){
     '<div class="frow c3">' + inp('pv-cod', 'Código *', c.codigo, (p0 ? ' disabled' : '') + ' placeholder="Ej. LASENS"') + inp('pv-nom', 'Razón social *', c.nombre) + inp('pv-rut', 'RUT', c.rut) + '</div>'
     + '<div class="frow c3">' + inp('pv-mon', 'Moneda habitual', c.moneda, ' list="dl-pv-mon" placeholder="USD / UY"') + inp('pv-ban', 'Banco', c.banco) + inp('pv-cb', 'Cuenta bancaria', c.cuenta_bancaria) + '</div>'
     + '<div class="frow">' + inp('pv-suc', 'Sucursal / dirección', c.sucursal) + '</div>'
-    + '<div class="frow c3">' + inp('pv-cc', 'Cuenta contable habitual (Tango)', c.cuenta_contable, ' list="dl-pv-cta"') + inp('pv-rub', 'Rubro habitual', c.rubro, ' list="dl-pv-rub"') + inp('pv-proy', 'Proyecto habitual', c.proyecto, ' placeholder="Ej. PL0090"') + '</div>'
+    + '<div class="frow c3">' + inp('pv-cc', 'Cuenta contable habitual (Tango)', c.cuenta_contable, ' list="dl-pv-cta"') + inp('pv-rub', 'Rubro habitual', c.rubro, ' list="dl-pv-rub"') + inp('pv-proy', 'Proyecto habitual', c.proyecto, ' placeholder="Ej. PL0090" list="dl-pv-proy"') + '</div>'
     + '<div class="frow">' + inp('pv-obs', 'Observaciones', c.observaciones) + '</div>'
+    + '<datalist id="dl-pv-proy">' + [...new Set(cuyProyOpciones(CUY.lista.map(x => x.proyecto)).filter(Boolean))].map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'
     + '<datalist id="dl-pv-mon"><option value="USD"><option value="UY"></datalist><datalist id="dl-pv-rub">' + CUY_RUBROS.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>'
     + '<datalist id="dl-pv-cta">' + CUY.dic.cuentas.filter(x => String(x.habil || '').toLowerCase() !== 'no').map(x => '<option value="' + esc(x.cod) + '">' + esc(x.cod + ' - ' + x.desc) + '</option>').join('') + '</datalist><div class="err" id="pv-err"></div>',
     '<button class="btn ghost" id="pv-no">Cancelar</button><button class="btn" id="pv-ok">Guardar</button>', 'wide');
