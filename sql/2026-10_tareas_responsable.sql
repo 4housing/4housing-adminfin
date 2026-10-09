@@ -43,8 +43,8 @@ drop policy if exists adminfin_tar_upd on public.adminfin_tareas;
 create policy adminfin_tar_sel on public.adminfin_tareas for select to authenticated
   using (public.adminfin_puede_ver('tareas')
          and (public.adminfin_tareas_es_supervisor() or asignado_a = auth.uid() or responsable = auth.uid() or asignado_por = auth.uid()));
--- actualizar (y transferir): supervisión, asignado, responsable o quien la creó. Después del cambio la tarea tiene que
--- seguir siendo visible para alguno de ellos (por eso el check mira también responsable / creador).
+-- actualizar: supervisión, asignado, responsable o quien la creó (la transferencia va por adminfin_tarea_transferir,
+-- porque quien transfiere puede dejar de ver la tarea y un update directo no lo permitiría).
 create policy adminfin_tar_upd on public.adminfin_tareas for update to authenticated
   using (public.adminfin_puede_ver('tareas')
          and (public.adminfin_tareas_es_supervisor() or asignado_a = auth.uid() or responsable = auth.uid() or asignado_por = auth.uid()))
