@@ -1886,7 +1886,13 @@ function cuyRenderConc(g){
   TABLAS[nsF] = { cols: colsF, base: () => facSinMov };
   const filF = tablaFiltrar(nsF, colsF, facSinMov, cuyTexto);
 
-  $main.innerHTML = cuyTabs() + chips + kpis + cuyCierresHtml(cn, mon, ef, cies)
+  // Caja: pagos de facturas cargados con el importe en la moneda de la FACTURA y no en la de la caja (ej. $U 4.281 como US$ 4.281)
+  const malMon = !ef ? [] : CUY.movs.filter(m => m.cuenta === cn && m.origen === 'factura_efectivo').map(m => ({ m, cs: cuyCompDeMov(m.id) }))
+    .filter(x => x.cs.length === 1 && (cuyEsUSD(x.cs[0]) ? 'USD' : 'UYU') !== mon && Math.abs(Math.abs(+x.m.importe) - (cuyFacTotal(x.cs[0]) || 0)) < 0.01);
+  const avisoMon = malMon.length ? '<div class="card" style="border-color:#e2c48a"><div style="padding:10px 14px;font-size:12.5px">⚠ <b>' + malMon.length + '</b> pago(s) de facturas en ' + (mon === 'USD' ? 'pesos' : 'dólares') + ' quedaron con el importe de la factura sin convertir a la moneda de la caja: '
+      + malMon.map(x => esc((x.cs[0].proveedor || '') + ' ' + (x.cs[0].serie_numero || '')) + ' (' + fmtMon(+x.m.importe, mon) + ')').join(' · ')
+      + (SP.editar ? ' <button class="btn sm" id="cc-malmon">Corregir importes</button>' : '') + '</div></div>' : '';
+  $main.innerHTML = cuyTabs() + chips + kpis + avisoMon + cuyCierresHtml(cn, mon, ef, cies)
     + '<div class="card">' + cardH('Movimientos · ' + cn, ef ? 'Caja en ' + (mon === 'USD' ? 'dólares' : 'pesos') + ': facturas pagadas en efectivo (se cargan con "Factura pagada en efectivo" y generan su movimiento), ingresos de caja y retiros. Compará el saldo con el arqueo.'
         : 'Extracto del banco. Cada pago tiene que tener su(s) factura(s) por el mismo importe ("Facturas" para vincular, o "Conciliar automático"). Los gastos bancarios no llevan factura: generan su asiento de gasto en la solapa Asientos.')
     + (movs.length ? tablaHerramientas(nsM, 'Buscar concepto, proveedor, clasificación, FAC…') + (filM.length ? tablaHtml(nsM, colsM, filM, pieM, m => CUY_A_REVISAR.includes(cuyMovEstado(m)) ? 'revisar' : '') : '<div class="empty">Ningún movimiento coincide con los filtros.</div>')
@@ -1909,6 +1915,16 @@ function cuyRenderConc(g){
     catch (e) { b.disabled = false; toast('No se guardó: ' + (e.message || e)); }
   }));
   $main.querySelectorAll('[data-mov-ed]').forEach(b => b.addEventListener('click', () => cuyMovForm(b.dataset.movEd)));
+  const bMal = document.getElementById('cc-malmon');
+  if (bMal) bMal.addEventListener('click', async () => {   // recalcula cada pago con el TC de la factura (o UYU/USD de su fecha)
+    bMal.disabled = true; let ok = 0;
+    for (const x of malMon) { try {
+      let r = x.cs[0];
+      if (r.cuenta !== cn) {   // la factura todavía dice otra caja: queda la de este movimiento
+        const { data, error } = await sb.from(CUY_T).update({ cuenta: cn }).eq('id', r.id).select(); if (error) throw error;
+        if (data && data[0]) { CUY.lista[CUY.lista.indexOf(r)] = data[0]; r = data[0]; } }
+      const t = await cuyEfectivoAuto(r); if (/actualizado/.test(t)) ok++; } catch (e) { toast('No se pudo: ' + (e.message || e)); } }
+    toast(ok + ' pago(s) corregido(s)'); cuyRender(); });
   $main.querySelectorAll('[data-mtc]').forEach(i => { i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
     i.addEventListener('change', async () => { const v = i.value === '' ? null : +i.value; if (v != null && !(v > 0)) { toast('El TC tiene que ser mayor a 0'); return; }
       try { await cuyMovGuardar(i.dataset.mtc, { tc: v }); toast(v ? 'TC guardado' : 'TC borrado: vuelve al sugerido'); cuyRender(); } catch (e) { toast('No se guardó: ' + (e.message || e)); } }); });
