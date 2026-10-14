@@ -1732,9 +1732,26 @@ function cuyEspejos(){
      [d.UYU.filter(m => +m.importe < 0), d.USD.filter(m => +m.importe > 0)]]    // compra de dólares
       .forEach(([x, y]) => { x.sort(abs); y.sort(abs); for (let i = 0; i < Math.min(x.length, y.length); i++) { map[x[i].id] = y[i]; map[y[i].id] = x[i]; } });
   });
+  CUY_ESPC = cuyEspejosCaja();
   return map;
 }
-let CUY_ESP = {};
+let CUY_ESP = {}, CUY_ESPC = {};
+// Retiro del banco a la caja (o depósito de la caja al banco): misma fecha, misma moneda, mismo importe con signo
+// opuesto, una pata en un banco y otra en una caja, sin facturas vinculadas. Va UN solo asiento (el de la pata del banco,
+// contra la caja); la pata de la caja no genera asiento propio.
+function cuyEspejosCaja(){
+  const map = {}, libre = m => m.tipo !== 'saldo_inicial' && m.origen !== 'factura_efectivo' && !cuyAplDeMov(m.id).length && !cuyEsCambio(m);
+  const bancos = CUY.movs.filter(m => (cuyCta(m.cuenta) || {}).g === 'banco' && libre(m)), cajas = CUY.movs.filter(m => (cuyCta(m.cuenta) || {}).g === 'efectivo' && libre(m));
+  const usadas = new Set();
+  bancos.forEach(b => { const c = cajas.find(x => !usadas.has(x.id) && x.fecha === b.fecha && cuyCta(x.cuenta).mon === cuyCta(b.cuenta).mon
+      && Math.abs((+x.importe || 0) + (+b.importe || 0)) < 0.005 && Math.abs(+b.importe || 0) > 0);
+    if (c) { usadas.add(c.id); map[b.id] = c; map[c.id] = b; } });
+  return map;
+}
+const cuyEsCajaEspejo = m => !!CUY_ESPC[m.id] && (cuyCta(m.cuenta) || {}).g === 'efectivo';   // pata de la caja: sin asiento propio
+// Movimientos que no llevan asiento propio: pagos en efectivo que van en el asiento de la factura y la pata de la caja
+// de un retiro / depósito (va en el asiento del banco)
+const cuyMovSinAsiento = m => cuyMovEnFactura(m) || cuyEsCajaEspejo(m);
 // TC implícito de un cambio (UYU por USD) a partir de las dos patas
 function cuyTcCambio(m){ const e = CUY_ESP[m.id]; if (!e) return null; const u = cuyCta(m.cuenta).mon === 'USD' ? m : e, p = u === m ? e : m; return Math.abs(+p.importe) / Math.abs(+u.importe); }
 function cuyMovEstado(m){
@@ -1743,6 +1760,7 @@ function cuyMovEstado(m){
   if (m.tipo === 'saldo_inicial') return 'Saldo inicial';
   if (m.tipo === 'gasto_bancario') return 'Gasto bancario';
   if (cuyEsCambio(m)) return CUY_ESP[m.id] ? 'Con espejo' : 'Sin espejo';
+  if (CUY_ESPC[m.id]) return 'Con espejo';   // retiro del banco ↔ ingreso en la caja (o depósito)
   if (m.tipo === 'entre_cuentas') return String(m.clasificacion || '').trim() ? 'Entre cuentas' : 'Sin clasificar';
   if (m.tipo === 'ingreso' || +m.importe > 0) return String(m.clasificacion || '').trim() ? 'Ingreso' : 'Sin clasificar';
   return 'Sin factura';
@@ -1856,12 +1874,14 @@ function cuyRenderConc(g){
     { id:'est', t:'Conciliación', v:cuyMovEstado, td:m => { const e = cuyMovEstado(m), d = cuyMovDif(m), cs = cuyCompDeMov(m.id), es = CUY_ESP[m.id];
         return '<span class="badge ' + (CUY_EST_BADGE[e] || 'b-gris') + '">' + esc(e) + '</span>'
           + (es ? '<div class="muted">↔ ' + esc(es.cuenta) + ' ' + fmtMon(+es.importe, cuyCta(es.cuenta).mon) + ' · TC ' + fmtTC(cuyTcCambio(m)) + '</div>' : '')
+          + (CUY_ESPC[m.id] ? '<div class="muted">↔ ' + esc(CUY_ESPC[m.id].cuenta) + ' ' + fmtMon(+CUY_ESPC[m.id].importe, cuyCta(CUY_ESPC[m.id].cuenta).mon) + (+m.importe < 0 && cuyCta(m.cuenta).g === 'banco' ? ' · retiro a caja' : cuyCta(m.cuenta).g === 'banco' ? ' · depósito de caja' : '') + '</div>' : '')
           + (cs.length ? '<div class="muted">' + cuyAplDeMov(m.id).map(a => { const c = CUY.lista.find(x => x.id === a.comprobante_id); return c ? esc(c.serie_numero || c.id) + ' ' + fmtMon(cuyAplImporte(a), mon) + (cuyCompConc(c) === 'Pago parcial' ? ' (parcial)' : '') : ''; }).join(', ') + '</div>' : '')
           + (e === 'Diferencia' ? '<div class="muted" style="color:#b0584f">' + (isNaN(d) ? 'factura sin TC' : 'dif. ' + fmtMon(d, mon)) + '</div>' : ''); } },
-    { id:'as', t:'Asiento', v:m => m.tipo === 'saldo_inicial' ? 'No aplica' : cuyMovEnFactura(m) ? 'En la factura' : (String(m.asiento_num || '').trim() ? 'Registrado' : 'Pendiente'),
+    { id:'as', t:'Asiento', v:m => m.tipo === 'saldo_inicial' ? 'No aplica' : cuyMovEnFactura(m) ? 'En la factura' : cuyEsCajaEspejo(m) ? 'En el del banco' : (String(m.asiento_num || '').trim() ? 'Registrado' : 'Pendiente'),
       td:m => { if (m.tipo === 'saldo_inicial') return '<span class="muted">—</span>';
         // pagada en efectivo con la caja como contrapartida de la factura: no lleva asiento propio, va en el de la factura
         if (cuyMovEnFactura(m)) { const ns = cuyCompDeMov(m.id).map(r => String(r.asiento_num || '').trim()); return '<span class="muted" title="No lleva asiento propio: la caja sale en el asiento de la factura">en la factura</span><div>' + (ns.every(Boolean) ? esc(ns.join(', ')) : '<span class="warn">factura sin N° de asiento</span>') + '</div>'; }
+        if (cuyEsCajaEspejo(m)) { const b = CUY_ESPC[m.id]; return '<span class="muted" title="No lleva asiento propio: va en el asiento del movimiento del banco">en el del banco</span><div>' + (String(b.asiento_num || '').trim() ? esc(b.asiento_num) : '<span class="muted">pendiente</span>') + '</div>'; }
         return esc(m.asiento_num || 'pendiente'); } },
     { id:'acc', t:'', td:m => SP.editar ? '<div class="row-actions">'
         + (cuyMovEstado(m) === 'Sin factura' ? '<button class="btn ghost sm" data-gbanc="' + esc(m.id) + '" title="Es una comisión / gasto del banco: no lleva factura. El respaldo es el extracto y genera su asiento de gasto bancario.">Es gasto bancario</button>' : '')
@@ -2389,6 +2409,7 @@ const cuyMovEnFactura = m => { const cs = cuyCompDeMov(m.id); return cs.length >
 function cuyContraMov(m){
   if (cuyCompDeMov(m.id).length) return 'PROVEEDORES';
   if (CUY_ESP[m.id] && cuyEsCambio(m)) return 'CAMBIO';
+  if (CUY_ESPC[m.id] && !String(m.contrapartida || '').trim()) return 'CUENTA:' + CUY_ESPC[m.id].cuenta;   // retiro / depósito: contra la caja (o el banco)
   if (String(m.contrapartida || '').trim()) return 'COD:' + String(m.contrapartida).trim();
   return m.tipo === 'gasto_bancario' ? 'CLASIF:GASTOS BANCARIOS' : cuyClaveClasif(m.clasificacion);
 }
@@ -2587,7 +2608,7 @@ function cuyAsientoExportar(asientos, nombre, bajar){
 function cuyExportarUY(){
   if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
   CUY_ESP = cuyEspejos(); cuySerieArmar();
-  const movs = CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') && !cuyMovEnFactura(m));
+  const movs = CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') && !cuyMovSinAsiento(m));
   let asientos;
   CUY_UY = true;
   try { asientos = CUY.lista.map(r => Object.assign(cuyAsientoFac(r), { tipo:'Factura' })).concat(movs.map(m => Object.assign(cuyAsientoMov(m), { tipo:'Banco / caja' }))); }
@@ -2734,6 +2755,7 @@ function cuyResCalc(desde, hasta){
   CUY.movs.filter(m => enRango(m.fecha)).forEach(m => {
     if (m.tipo === 'saldo_inicial') { fuera.push({ m, motivo: 'Saldo inicial: no genera asiento. Si en Tango lo registraste con un asiento, cambiale el tipo (ej. Entre cuentas) y cargá la contrapartida.' }); return; }
     if (cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') return;   // va en el asiento de la pata en dólares
+    if (cuyEsCajaEspejo(m)) return;                                              // va en el asiento del retiro / depósito del banco
     if (cuyMovEnFactura(m)) {                                                    // va en el asiento de la factura
       const codCta = cuyPlan('CUENTA:' + m.cuenta).codigo, otros = [...new Set(cuyCompDeMov(m.id).map(r => cuyPlan(cuyClaveContra(r)).codigo).filter(c => c && c !== codCta))];
       if (otros.length) fuera.push({ m, motivo: 'La factura acredita la cuenta ' + otros.join(', ') + ' (su contrapartida), no ' + (codCta || 'esta cuenta') + ' (' + m.cuenta + '). Si se pagó desde otra caja, cambiá la "Cuenta" de pago de la factura a esa caja.' });
@@ -2947,7 +2969,7 @@ const cuyAsSub = () => '<div class="mtabs" style="margin:-4px 0 14px">' + [['fac
 function cuyRenderAsientos(){
   if (CUY.asTab === 'cierre') return cuyRenderCierre();
   const fac = CUY.asTab === 'fac', ns = fac ? 'afac' : 'amov', sel = CUY.sel[fac ? 'fac' : 'mov'];
-  const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') && !cuyMovEnFactura(m));
+  const base = fac ? CUY.lista : CUY.movs.filter(m => m.tipo !== 'saldo_inicial' && !(cuyContraMov(m) === 'CAMBIO' && cuyCta(m.cuenta).mon !== 'USD') && !cuyMovSinAsiento(m));
   const asDe = x => cuyAsientoDol(x, fac);   // el asiento para Tango va en dólares (DOL)
   const faltaCod = x => asDe(x).lineas.filter(l => r2(l.monto) && !cuyPlan(l.clave).codigo).map(l => l.clave === CUY_SIN_CTA ? 'falta cuenta contable (Comprobantes)' : l.clave);
   // Importe en US$ del asiento: Proveedores (o, si la factura se pagó en efectivo / tiene otra contrapartida, el total
