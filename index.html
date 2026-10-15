@@ -119,6 +119,13 @@ a.lnk:hover{text-decoration:underline;}
 .b-rojo{background:#f6ebea;color:#b0584f;}
 
 /* ===== KPIs (mismos que Compras) ===== */
+table.grid[data-tbl="tarf"], table.grid[data-tbl="tarm"]{width:auto;min-width:0;}
+table.grid[data-tbl="tarf"] td.wrap, table.grid[data-tbl="tarm"] td.wrap{max-width:300px;}
+.tet{display:flex;align-items:center;gap:8px;white-space:nowrap;font-size:12.5px;}
+.tet-q{min-width:92px;}
+.tet-v{min-width:40px;color:var(--muted);}
+.tet-v.warn{color:#b0584f;font-weight:600;}
+select.tst-hecha{background:#e6f1e3;color:#3f6f43;} select.tst-en_curso{background:#e7eef6;color:#3f6290;} select.tst-pendiente{background:#fbf1e0;color:#93692a;}
 .tgraf{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 @media(max-width:900px){ .tgraf{grid-template-columns:1fr;} }
 .tbar-row{display:grid;grid-template-columns:150px 1fr 120px;gap:10px;align-items:center;margin:0 0 9px;font-size:12.5px;}
@@ -367,13 +374,17 @@ const TAR = { cargado:false, err:'', lista:[], com:[], adj:[], usuarios:[], sup:
   fijas:[], meses:[], errFij:'', modo:'mes', per:'', mesVer:'abiertas', fijLista:'', hist:[], errHist:'', histVer:'eliminada' };
 const TAR_HIST_T = 'adminfin_tareas_historial';
 const TAR_FIJ_T = 'adminfin_tareas_fijas', TAR_MES_T = 'adminfin_tareas_meses';
-const TAR_EST = { pendiente:'Pendiente', en_curso:'En curso', hecha:'Hecha' };
+const TAR_EST = { pendiente:'Pendiente', en_curso:'En gestión', hecha:'Cumplido' };
 const TAR_ALIAS = {   // nombre a mostrar por mail de login (pedido de dirección, oct 2026)
   'administracion@4housing.com.ar': 'Carranza, A.', 'valentinaquiencke@4housing.com.ar': 'Quiencke, V.',
   'facturacion@4housing.com.ar': 'Cittar, S.', 'micaela@4housing.com.ar': 'Seoane, M.', 'proveedores@4housing.com.ar': 'Tesouro, S.' };
 const TAR_BADGE = { pendiente:'b-ambar', en_curso:'b-azul', hecha:'b-verde' };
 const tarNom = id => { const u = TAR.usuarios.find(x => x.id === id); return u ? (u.nombre || u.email) : (id === SP.uid ? 'Yo' : '—'); };
-const tarVencida = t => t.estado !== 'hecha' && t.vencimiento && String(t.vencimiento) < hoyISO();
+// etapas: la tarea (o el pago) y, si tiene, el registro contable (reg_*: sql/2026-10_tareas_registro.sql)
+const tarEtapas = t => [{ etapa: t.reg_estado ? 'Pago' : 'Tarea', estado: t.estado, vencimiento: t.vencimiento, completada_en: t.completada_en, quien: t.asignado_a }]
+  .concat(t.reg_estado ? [{ etapa: 'Registro contable', estado: t.reg_estado, vencimiento: t.reg_vencimiento, completada_en: t.reg_completada_en, quien: t.reg_responsable || t.asignado_a }] : []);
+const tarHecha = t => t.estado === 'hecha' && (!t.reg_estado || t.reg_estado === 'hecha');
+const tarVencida = t => tarEtapas(t).some(e => e.estado !== 'hecha' && e.vencimiento && String(e.vencimiento) < hoyISO());
 const tarResp = t => t.responsable || t.asignado_a;   // responsable: quien responde (no cambia al transferir)
 // tareas del mes (con período): solo supervisión las modifica o transfiere; el resto solo cambia el estado (lo controla la base)
 const tarPuedeEditar = t => TAR.sup || (!t.periodo && (t.asignado_por === SP.uid || tarResp(t) === SP.uid));
@@ -408,11 +419,11 @@ function tarRender(){
 function tarRenderLista(tabs){
   const ta = document.getElementById('topActions');
   ta.innerHTML = SP.editar ? '<button class="btn" id="tr-nueva">' + ICO.plus + 'Nueva tarea</button>' : '';
-  const mias = TAR.lista.filter(t => t.asignado_a === SP.uid), creadas = TAR.lista.filter(t => t.asignado_por === SP.uid);
+  const mias = TAR.lista.filter(t => t.asignado_a === SP.uid || t.reg_responsable === SP.uid), creadas = TAR.lista.filter(t => t.asignado_por === SP.uid);
   const resp = TAR.lista.filter(t => tarResp(t) === SP.uid && t.asignado_a !== SP.uid);   // soy responsable y la delegué
-  const abiertas = xs => xs.filter(t => t.estado !== 'hecha');
+  const abiertas = xs => xs.filter(t => !tarHecha(t));
   const base = TAR.vista === 'mias' ? mias : TAR.vista === 'creadas' ? creadas : TAR.vista === 'resp' ? resp : TAR.lista;
-  const filas = base.filter(t => TAR.estado === 'todas' ? true : TAR.estado === 'hechas' ? t.estado === 'hecha' : t.estado !== 'hecha');
+  const filas = base.filter(t => TAR.estado === 'todas' ? true : TAR.estado === 'hechas' ? tarHecha(t) : !tarHecha(t));
   const nCom = id => TAR.com.filter(c => c.tarea_id === id).length, nAdj = id => TAR.adj.filter(a => a.tarea_id === id).length;
   const cols = [
     { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? '<div class="muted" style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.descripcion) + '</div>' : '') },
@@ -456,12 +467,19 @@ const tarMesNom = p => { const [a, m] = String(p).split('-'); return (TAR_MESES[
 const tarMesAbierto = () => (TAR.meses.find(m => !m.cerrado_en) || {}).periodo || '';
 // estado para avance: a tiempo / fuera de término / en curso / pendiente / vencida
 const TAR_AV = [
-  ['tiempo', 'Hecha a tiempo', '#3f7f45'], ['tarde', 'Hecha fuera de término', '#7fb070'],
-  ['curso', 'En curso', '#4a78b5'], ['pend', 'Pendiente', '#c99a3a'], ['venc', 'Vencida', '#c0504a']];
+  ['tiempo', 'Cumplida a tiempo', '#3f7f45'], ['tarde', 'Cumplida fuera de término', '#7fb070'],
+  ['curso', 'En gestión', '#4a78b5'], ['pend', 'Pendiente', '#c99a3a'], ['venc', 'Vencida', '#c0504a']];
+function tarAvEt(e){
+  if (e.estado === 'hecha') { const d = e.completada_en ? hoyLocal(e.completada_en) : ''; return !e.vencimiento || !d || d <= String(e.vencimiento) ? 'tiempo' : 'tarde'; }
+  if (e.vencimiento && String(e.vencimiento) < hoyISO()) return 'venc';
+  return e.estado === 'en_curso' ? 'curso' : 'pend';
+}
+// avance de la tarea: cumplida cuando todas sus etapas lo están (a tiempo si todas a tiempo)
 function tarAv(t){
-  if (t.estado === 'hecha') { const d = t.completada_en ? hoyLocal(t.completada_en) : ''; return !t.vencimiento || !d || d <= String(t.vencimiento) ? 'tiempo' : 'tarde'; }
-  if (tarVencida(t)) return 'venc';
-  return t.estado === 'en_curso' ? 'curso' : 'pend';
+  const ks = tarEtapas(t).map(tarAvEt);
+  if (ks.every(k => k === 'tiempo' || k === 'tarde')) return ks.includes('tarde') ? 'tarde' : 'tiempo';
+  if (ks.includes('venc')) return 'venc';
+  return ks.some(k => k !== 'pend') ? 'curso' : 'pend';
 }
 function hoyLocal(ts){ const d = new Date(ts); return isNaN(d) ? '' : d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
 // barra apilada horizontal con etiqueta (hechas / total · %); el detalle de cada tramo va en el tooltip
@@ -490,32 +508,36 @@ function tarRenderMes(tabs){
     tarMesEventos(); return;
   }
   const xs = TAR.lista.filter(t => t.periodo === TAR.per), cerrado = (TAR.meses.find(m => m.periodo === TAR.per) || {}).cerrado_en;
-  const nH = xs.filter(t => t.estado === 'hecha').length, nV = xs.filter(tarVencida).length, nT = xs.filter(t => tarAv(t) === 'tiempo').length;
+  const nH = xs.filter(tarHecha).length, nV = xs.filter(tarVencida).length, nT = xs.filter(t => tarAv(t) === 'tiempo').length;
   const pend = xs.length - nH, pct = v => xs.length ? Math.round(v / xs.length * 100) + '%' : '—';
   if (TAR.sup && !cerrado && TAR.per === abierto)
-    ta.innerHTML = '<button class="btn ghost" id="tm-agregar">' + ICO.plus + 'Agregar tarea al mes</button><button class="btn" id="tm-cerrar"' + (pend ? ' disabled title="Faltan ' + pend + ' tarea(s) sin hacer"' : '') + '>Cerrar ' + esc(tarMesNom(TAR.per)) + '</button>';
+    ta.innerHTML = '<button class="btn ghost" id="tm-agregar">' + ICO.plus + 'Agregar tarea al mes</button><button class="btn" id="tm-cerrar"' + (pend ? ' disabled title="Faltan ' + pend + ' tarea(s) sin cumplir"' : '') + '>Cerrar ' + esc(tarMesNom(TAR.per)) + '</button>';
   const kpi = (l, v, sub, warn) => '<div class="kpi"><div class="kpi-label">' + l + '</div><div class="kpi-value' + (warn ? ' warn' : '') + '">' + v + '</div><div class="kpi-sub">' + sub + '</div></div>';
   // agrupaciones para los gráficos (orden de las listas = orden de la plantilla)
   const ordLista = l => { const f = TAR.fijas.find(x => x.lista === l); return f ? f.orden : 1e9; };
   const listas = [...new Set(xs.map(t => t.lista || 'Sin lista'))].sort((a, b) => ordLista(a) - ordLista(b));
-  const resps = [...new Set(xs.map(t => t.asignado_a))].sort((a, b) => tarNom(a).localeCompare(tarNom(b)));
+  const etapas = xs.flatMap(tarEtapas), resps = [...new Set(etapas.map(e => e.quien))].sort((a, b) => tarNom(a).localeCompare(tarNom(b)));
   // historia: % hecho a tiempo por mes (solo lo que ve el usuario)
-  const hist = TAR.meses.slice(-12).map(m => { const ys = TAR.lista.filter(t => t.periodo === m.periodo); return { p: m.periodo, n: ys.length, a: ys.filter(t => tarAv(t) === 'tiempo').length, h: ys.filter(t => t.estado === 'hecha').length, abierto: !m.cerrado_en }; });
+  const hist = TAR.meses.slice(-12).map(m => { const ys = TAR.lista.filter(t => t.periodo === m.periodo); return { p: m.periodo, n: ys.length, a: ys.filter(t => tarAv(t) === 'tiempo').length, h: ys.filter(tarHecha).length, abierto: !m.cerrado_en }; });
   const histHtml = '<div class="thist">' + hist.map(x => { const v = x.n ? Math.round(x.a / x.n * 100) : 0, vh = x.n ? Math.round(x.h / x.n * 100) : 0;
       return '<div class="thist-col' + (x.p === TAR.per ? ' sel' : '') + '" data-tm-per="' + x.p + '" title="' + esc(tarMesNom(x.p)) + ': ' + v + '% a tiempo · ' + vh + '% hecho (' + x.h + '/' + x.n + ')' + (x.abierto ? ' · abierto' : '') + '">'
         + '<div class="thist-v">' + v + '%</div><div class="thist-bar"><span style="height:' + Math.max(v, 1) + '%"></span></div><div class="thist-l">' + TAR_MESES[+x.p.slice(5) - 1].slice(0, 3) + ' ' + x.p.slice(2, 4) + (x.abierto ? '*' : '') + '</div></div>'; }).join('') + '</div>';
   const ley = '<div class="tleg">' + TAR_AV.map(([, l, c]) => '<span><i style="background:' + c + '"></i>' + l + '</span>').join('') + '</div>';
   // tabla
-  const verTodo = TAR.mesVer === 'todas', filas = xs.filter(t => verTodo || t.estado !== 'hecha')
+  const verTodo = TAR.mesVer === 'todas', filas = xs.filter(t => verTodo || !tarHecha(t))
     .sort((a, b) => ordLista(a.lista) - ordLista(b.lista) || String(a.vencimiento || '').localeCompare(String(b.vencimiento || '')) || a.id - b.id);
-  const puedeEst = t => tarPuedeEditar(t) || t.asignado_a === SP.uid || tarResp(t) === SP.uid;
+  const puedeEst = t => tarPuedeEditar(t) || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid;
+  const selEst = (t, campo) => { const v = t[campo], ok = puedeEst(t) && !cerrado;
+    return '<select class="tc-in tst-' + v + '" style="width:auto;text-align:left" data-tm-est="' + t.id + '|' + campo + '"' + (ok ? '' : ' disabled') + '>'
+      + Object.entries(TAR_EST).map(([k, l]) => '<option value="' + k + '"' + (v === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>'; };
+  const etapaTd = (t, quien, venc, campo) => '<div class="tet"><span class="tet-q">' + esc(tarNom(quien)) + '</span><span class="tet-v' + (t[campo] !== 'hecha' && venc && String(venc) < hoyISO() ? ' warn' : '') + '">'
+    + (venc ? fmtFecha(venc).slice(0, 5) : '—') + '</span>' + selEst(t, campo) + '</div>';
   const cols = [
     { id:'lista', t:'Lista', v:t => t.lista || 'Sin lista', td:t => esc(t.lista || '—') },
     { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? ' <span class="muted">· ' + esc(t.descripcion) + '</span>' : '') },
-    { id:'a', t:'Responsable', v:t => tarNom(t.asignado_a), td:t => esc(tarNom(t.asignado_a)) + (tarResp(t) !== t.asignado_a ? ' <span class="muted">(resp. ' + esc(tarNom(tarResp(t))) + ')</span>' : '') },
-    { id:'vence', t:'Vence', fecha:t => t.vencimiento, td:t => t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtFecha(t.vencimiento) + '</b> · vencida</span>' : fmtFecha(t.vencimiento)) : '—' },
-    { id:'est', t:'Estado', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)); return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '">' + a[1] + '</span>'; } },
-    { id:'ok', t:'', td:t => puedeEst(t) && !cerrado ? (t.estado === 'hecha' ? '<button class="btn ghost sm" data-tm-est="' + t.id + '|pendiente" title="Volver a pendiente">↺</button>' : '<button class="btn sm" data-tm-est="' + t.id + '|hecha">✓ Hecha</button>') : '' },
+    { id:'a', t:'Pago / tarea · responsable, vence, estado', v:t => tarNom(t.asignado_a), fecha:t => t.vencimiento, td:t => etapaTd(t, t.asignado_a, t.vencimiento, 'estado') },
+    { id:'reg', t:'Registro contable', v:t => t.reg_estado ? tarNom(t.reg_responsable || t.asignado_a) : '—', td:t => t.reg_estado ? etapaTd(t, t.reg_responsable || t.asignado_a, t.reg_vencimiento, 'reg_estado') : '<span class="muted">—</span>' },
+    { id:'est', t:'Avance', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)); return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '">' + a[1] + '</span>'; } },
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
   ];
   TABLAS.tarm = { cols, base: () => filas };
@@ -523,17 +545,17 @@ function tarRenderMes(tabs){
   $main.innerHTML = tabs + avisoFaltan
     + '<div class="tools" style="padding:0 0 12px"><span style="font-size:12px;color:var(--muted)">Mes</span><select class="tc-in" style="width:auto;text-align:left" id="tm-sel">'
     + TAR.meses.slice().reverse().map(m => '<option value="' + m.periodo + '"' + (m.periodo === TAR.per ? ' selected' : '') + '>' + tarMesNom(m.periodo) + (m.cerrado_en ? ' · cerrado' : ' · abierto') + '</option>').join('') + '</select>'
-    + (cerrado ? '<span class="badge b-verde">Cerrado el ' + fmtFecha(hoyLocal(cerrado)) + '</span>' : pend ? '<span class="muted" style="font-size:12.5px">Para cerrar el mes tienen que estar todas hechas: faltan <b>' + pend + '</b>.</span>' : '<span class="badge b-verde">Todo hecho: se puede cerrar</span>')
+    + (cerrado ? '<span class="badge b-verde">Cerrado el ' + fmtFecha(hoyLocal(cerrado)) + '</span>' : pend ? '<span class="muted" style="font-size:12.5px">Para cerrar el mes tienen que estar todas cumplidas (pago y registro): faltan <b>' + pend + '</b>.</span>' : '<span class="badge b-verde">Todo cumplido: se puede cerrar</span>')
     + (TAR.sup ? '' : '<span class="muted" style="font-size:12px;margin-left:auto">Ves solo tus tareas.</span>') + '</div>'
-    + '<div class="kpi-grid">' + kpi('Avance', pct(nH), nH + ' de ' + xs.length + ' hechas') + kpi('Hechas a tiempo', pct(nT), nT + ' tareas') + kpi('Sin hacer', pend, xs.filter(t => t.estado === 'en_curso').length + ' en curso')
-    + kpi('Vencidas', nV, 'sin hacer y pasadas de fecha', nV > 0) + '</div>'
-    + '<div class="tgraf"><div class="card">' + cardH('Avance por lista', 'hechas / total') + '<div style="padding:12px 16px">' + listas.map(l => tarBarra(l, xs.filter(t => (t.lista || 'Sin lista') === l))).join('') + ley + '</div></div>'
-    + '<div class="card">' + cardH('Avance por responsable', 'hechas / total') + '<div style="padding:12px 16px">' + resps.map(u => tarBarra(tarNom(u), xs.filter(t => t.asignado_a === u))).join('') + ley + '</div></div></div>'
-    + '<div class="card" style="margin-top:14px">' + cardH('Evolución mensual', '% de tareas hechas a tiempo · * = mes abierto · clic para ver el mes') + '<div style="padding:12px 16px">' + histHtml + '</div></div>'
+    + '<div class="kpi-grid">' + kpi('Avance', pct(nH), nH + ' de ' + xs.length + ' cumplidas') + kpi('Cumplidas a tiempo', pct(nT), nT + ' tareas') + kpi('Sin cumplir', pend, xs.filter(t => tarAv(t) === 'curso').length + ' en gestión')
+    + kpi('Vencidas', nV, 'sin cumplir y pasadas de fecha', nV > 0) + '</div>'
+    + '<div class="tgraf"><div class="card">' + cardH('Avance por lista', 'tareas cumplidas / total') + '<div style="padding:12px 16px">' + listas.map(l => tarBarra(l, xs.filter(t => (t.lista || 'Sin lista') === l))).join('') + ley + '</div></div>'
+    + '<div class="card">' + cardH('Avance por responsable', 'etapas cumplidas / total (pago y registro cuentan a quien le toca)') + '<div style="padding:12px 16px">' + resps.map(u => tarBarra(tarNom(u), etapas.filter(e => e.quien === u))).join('') + ley + '</div></div></div>'
+    + '<div class="card" style="margin-top:14px">' + cardH('Evolución mensual', '% de tareas cumplidas a tiempo · * = mes abierto · clic para ver el mes') + '<div style="padding:12px 16px">' + histHtml + '</div></div>'
     + '<div class="card" style="margin-top:14px">' + cardH('Tareas de ' + tarMesNom(TAR.per), xs.length + ' tareas')
     + '<div class="tools" style="padding-bottom:0"><span style="font-size:12px;color:var(--muted)">Mostrar</span><select class="tc-in" style="width:auto;text-align:left" id="tm-ver">'
-    + [['abiertas', 'Sin hacer'], ['todas', 'Todas']].map(([k, l]) => '<option value="' + k + '"' + (TAR.mesVer === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>'
-    + (filas.length ? tablaHerramientas('tarm', 'Buscar tarea, lista, persona…') + tablaHtml('tarm', cols, f, '', t => tarVencida(t) ? 'revisar' : '') : '<div class="empty">' + (xs.length ? 'Todas hechas 🎉' : 'No hay tareas para mostrar.') + '</div>') + '</div>';
+    + [['abiertas', 'Sin cumplir'], ['todas', 'Todas']].map(([k, l]) => '<option value="' + k + '"' + (TAR.mesVer === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>'
+    + (filas.length ? tablaHerramientas('tarm', 'Buscar tarea, lista, persona…') + tablaHtml('tarm', cols, f, '', t => tarVencida(t) ? 'revisar' : '') : '<div class="empty">' + (xs.length ? 'Todas cumplidas 🎉' : 'No hay tareas para mostrar.') + '</div>') + '</div>';
   tablaEventos(); tarMesEventos();
 }
 function tarMesEventos(){
@@ -544,9 +566,9 @@ function tarMesEventos(){
   if ($('tm-ver')) $('tm-ver').addEventListener('change', e => { TAR.mesVer = e.target.value; tarRender(); });
   if ($('tm-agregar')) $('tm-agregar').addEventListener('click', () => tarForm(null, TAR.per));
   $main.querySelectorAll('[data-tr-ver]').forEach(b => b.addEventListener('click', () => tarDetalle(+b.dataset.trVer)));
-  $main.querySelectorAll('[data-tm-est]').forEach(b => b.addEventListener('click', async () => {
-    const [id, est] = b.dataset.tmEst.split('|'); b.disabled = true;
-    const { data, error } = await sb.from(TAR_T).update({ estado: est }).eq('id', +id).select();
+  $main.querySelectorAll('[data-tm-est]').forEach(b => b.addEventListener('change', async () => {
+    const [id, campo] = b.dataset.tmEst.split('|'); b.disabled = true;
+    const { data, error } = await sb.from(TAR_T).update({ [campo]: b.value }).eq('id', +id).select();
     if (error || !data || !data.length) { toast('No se guardó: ' + ((error && error.message) || 'sin permiso')); b.disabled = false; return; }
     const i = TAR.lista.findIndex(t => t.id === +id); if (i >= 0) TAR.lista[i] = data[0]; tarRender(); }));
   if ($('tm-abrir')) $('tm-abrir').addEventListener('click', async () => {
@@ -572,14 +594,17 @@ function tarRenderFijas(tabs){
   const listas = [...new Set(TAR.fijas.map(f => f.lista))];
   const base = TAR.fijas.filter(f => !TAR.fijLista || f.lista === TAR.fijLista);
   const faltan = TAR.fijas.filter(f => f.activa && (!f.responsable || !f.dia_vence)).length;
-  const optU = sel => '<option value="">— elegí —</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '"' + (u.id === sel ? ' selected' : '') + '>' + esc(u.nombre || u.email) + '</option>').join('');
+  const optU = (sel, vacio) => '<option value="">' + (vacio || '— elegí —') + '</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '"' + (u.id === sel ? ' selected' : '') + '>' + esc(u.nombre || u.email) + '</option>').join('');
+  const selU = (f, campo, vacio, rojo) => ed ? '<select class="tc-in" style="width:auto;text-align:left' + (rojo ? ';border-color:#c0504a' : '') + '" data-tfx="' + f.id + '|' + campo + '">' + optU(f[campo], vacio) + '</select>' : (f[campo] ? esc(tarNom(f[campo])) : vacio ? '<span class="muted">' + vacio + '</span>' : '<span class="warn">sin asignar</span>');
+  const inDia = (f, campo, rojo) => ed ? '<input type="number" min="1" max="31" class="tc-in" style="width:56px' + (rojo ? ';border-color:#c0504a' : '') + '" value="' + (f[campo] || '') + '" data-tfx="' + f.id + '|' + campo + '">' : (f[campo] || (rojo ? '<span class="warn">—</span>' : '—'));
   const cols = [
     { id:'lista', t:'Lista', v:f => f.lista, td:f => esc(f.lista) },
-    { id:'tit', t:'Tarea', s:f => f.titulo, cls:'wrap', td:f => '<b>' + esc(f.titulo) + '</b>' + (f.descripcion ? ' <span class="muted">· ' + esc(f.descripcion) + '</span>' : '') },
-    { id:'resp', t:'Responsable', v:f => f.responsable ? tarNom(f.responsable) : '(sin asignar)',
-      td:f => ed ? '<select class="tc-in" style="width:auto;text-align:left' + (f.responsable ? '' : ';border-color:#c0504a') + '" data-tfx="' + f.id + '|responsable">' + optU(f.responsable) + '</select>' : (f.responsable ? esc(tarNom(f.responsable)) : '<span class="warn">sin asignar</span>') },
-    { id:'dia', t:'Vence el día', s:f => f.dia_vence || 99, td:f => ed ? '<input type="number" min="1" max="31" class="tc-in" style="width:64px' + (f.dia_vence ? '' : ';border-color:#c0504a') + '" value="' + (f.dia_vence || '') + '" data-tfx="' + f.id + '|dia_vence">' : (f.dia_vence || '<span class="warn">—</span>') },
-    { id:'veces', t:'Veces / mes', s:f => f.veces, cls:'num', td:f => f.veces },
+    { id:'tit', t:'Tarea', s:f => f.titulo, cls:'wrap', td:f => '<b>' + esc(f.titulo) + '</b>' + (f.descripcion ? '<div class="muted" style="font-size:11.5px">' + esc(f.descripcion) + '</div>' : '') },
+    { id:'resp', t:'Responsable', v:f => f.responsable ? tarNom(f.responsable) : '(sin asignar)', td:f => selU(f, 'responsable', '', !f.responsable) },
+    { id:'dia', t:'Día', s:f => f.dia_vence || 99, td:f => inDia(f, 'dia_vence', !f.dia_vence) },
+    { id:'rdia', t:'Registro: día', s:f => f.dia_registro || 99, td:f => inDia(f, 'dia_registro', false) },
+    { id:'rresp', t:'Registro: responsable', v:f => f.dia_registro ? tarNom(f.responsable_registro || f.responsable) : '—', td:f => f.dia_registro ? selU(f, 'responsable_registro', '(el mismo)') : '<span class="muted">—</span>' },
+    { id:'veces', t:'Veces', s:f => f.veces, cls:'num', td:f => f.veces },
     { id:'act', t:'Activa', v:f => f.activa ? 'Sí' : 'No', td:f => ed ? '<input type="checkbox"' + (f.activa ? ' checked' : '') + ' data-tfx="' + f.id + '|activa">' : (f.activa ? 'Sí' : 'No') },
     { id:'acc', t:'', td:f => ed ? '<button class="btn ghost sm" data-tf-ed="' + f.id + '">Editar</button>' : '' },
   ];
@@ -592,7 +617,9 @@ function tarRenderFijas(tabs){
     + (ed ? '<div class="tools" style="padding:10px 14px 0;flex-wrap:wrap;gap:8px"><b style="font-size:12.5px">Completar en bloque</b>'
       + '<span class="muted" style="font-size:12px">a las ' + base.length + ' tarea(s) de ' + (TAR.fijLista ? '«' + esc(TAR.fijLista) + '»' : 'todas las listas') + ':</span>'
       + '<select class="tc-in" style="width:auto;text-align:left" id="tfb-resp"><option value="">Responsable (no cambiar)</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '">' + esc(u.nombre || u.email) + '</option>').join('') + '</select>'
-      + '<input type="number" min="1" max="31" class="tc-in" style="width:110px" id="tfb-dia" placeholder="Día (1-31)">'
+      + '<input type="number" min="1" max="31" class="tc-in" style="width:96px" id="tfb-dia" placeholder="Día (1-31)">'
+      + '<input type="number" min="1" max="31" class="tc-in" style="width:120px" id="tfb-rdia" placeholder="Día registro">'
+      + '<select class="tc-in" style="width:auto;text-align:left" id="tfb-rresp"><option value="">Resp. registro (no cambiar)</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '">' + esc(u.nombre || u.email) + '</option>').join('') + '</select>'
       + '<label style="font-size:12.5px"><input type="checkbox" id="tfb-vacias" checked> solo donde está vacío</label>'
       + '<button class="btn ghost sm" id="tfb-ok">Aplicar</button></div>' : '')
     + '<div class="chips" style="padding:8px 14px 0">' + chip('', 'Todas (' + TAR.fijas.length + ')') + listas.map(l => chip(l, l + ' (' + TAR.fijas.filter(f => f.lista === l).length + ')')).join('') + '</div>'
@@ -603,14 +630,16 @@ function tarRenderFijas(tabs){
   const b0 = document.getElementById('tf-nueva'); if (b0) b0.addEventListener('click', () => tarFijaForm(null));
   const bb = document.getElementById('tfb-ok'); if (bb) bb.addEventListener('click', async () => {
     const resp = document.getElementById('tfb-resp').value, diaTxt = document.getElementById('tfb-dia').value.trim(), vac = document.getElementById('tfb-vacias').checked;
-    const dia = diaTxt ? parseInt(diaTxt, 10) : null;
-    if (!resp && !diaTxt) { toast('Elegí un responsable y/o un día'); return; }
-    if (diaTxt && !(dia >= 1 && dia <= 31)) { toast('El día tiene que ser de 1 a 31'); return; }
+    const dia = diaTxt ? parseInt(diaTxt, 10) : null, rdTxt = document.getElementById('tfb-rdia').value.trim(), rdia = rdTxt ? parseInt(rdTxt, 10) : null, rresp = document.getElementById('tfb-rresp').value;
+    if (!resp && !diaTxt && !rdTxt && !rresp) { toast('Elegí un responsable y/o un día'); return; }
+    if ((diaTxt && !(dia >= 1 && dia <= 31)) || (rdTxt && !(rdia >= 1 && rdia <= 31))) { toast('El día tiene que ser de 1 a 31'); return; }
     let n = 0, fallas = 0;
     for (const f of base) {
       const cambio = {};
       if (resp && (!vac || !f.responsable)) cambio.responsable = resp;
       if (dia && (!vac || !f.dia_vence)) cambio.dia_vence = dia;
+      if (rdia && (!vac || !f.dia_registro)) cambio.dia_registro = rdia;
+      if (rresp && (!vac || !f.responsable_registro)) cambio.responsable_registro = rresp;
       if (!Object.keys(cambio).length) continue;
       const { data, error } = await sb.from(TAR_FIJ_T).update(cambio).eq('id', f.id).select();
       if (error || !data || !data.length) { fallas++; continue; }
@@ -620,7 +649,7 @@ function tarRenderFijas(tabs){
   $main.querySelectorAll('[data-tfx]').forEach(inp => inp.addEventListener('change', async () => {
     const [id, campo] = inp.dataset.tfx.split('|'), f = TAR.fijas.find(x => x.id === +id);
     let v = inp.type === 'checkbox' ? inp.checked : inp.value.trim() || null;
-    if (campo === 'dia_vence' && v != null) { v = parseInt(v, 10); if (!(v >= 1 && v <= 31)) { toast('El día tiene que ser de 1 a 31'); inp.value = f.dia_vence || ''; return; } }
+    if ((campo === 'dia_vence' || campo === 'dia_registro') && v != null) { v = parseInt(v, 10); if (!(v >= 1 && v <= 31)) { toast('El día tiene que ser de 1 a 31'); inp.value = f[campo] || ''; return; } }
     const { data, error } = await sb.from(TAR_FIJ_T).update({ [campo]: v }).eq('id', +id).select();
     if (error || !data || !data.length) { toast('No se guardó: ' + ((error && error.message) || 'sin permiso')); return; }
     TAR.fijas[TAR.fijas.indexOf(f)] = data[0]; toast('Guardado'); tarRender(); }));
@@ -634,7 +663,9 @@ function tarFijaForm(id){
     + '<datalist id="dl-fx-lista">' + [...new Set(TAR.fijas.map(f => f.lista))].map(l => '<option value="' + esc(l) + '">').join('') + '</datalist>'
     + inp('fx-tit', 'Tarea *', c.titulo) + inp('fx-desc', 'Detalle / rubro', c.descripcion) + '</div>'
     + '<div class="frow c3"><div class="field"><label>Responsable *</label><select id="fx-resp"><option value="">Elegí…</option>' + tarOpcUsuarios(c.responsable) + '</select></div>'
-    + inp('fx-dia', 'Vence el día *', c.dia_vence, ' type="number" min="1" max="31"') + inp('fx-veces', 'Veces por mes', c.veces, ' type="number" min="1" max="31"') + '</div>'
+    + inp('fx-dia', 'Vence el día * (pago / tarea)', c.dia_vence, ' type="number" min="1" max="31"') + inp('fx-veces', 'Veces por mes', c.veces, ' type="number" min="1" max="31"') + '</div>'
+    + '<div class="frow c3">' + inp('fx-rdia', 'Registro contable: vence el día (opcional)', c.dia_registro, ' type="number" min="1" max="31"')
+    + '<div class="field"><label>Registro contable: responsable</label><select id="fx-rresp"><option value="">(el mismo)</option>' + tarOpcUsuarios(c.responsable_registro) + '</select></div></div>'
     + '<div class="frow c3">' + inp('fx-orden', 'Orden', c.orden != null ? c.orden : (Math.max(0, ...TAR.fijas.map(f => f.orden || 0)) + 1), ' type="number"')
     + '<div class="field"><label>Activa</label><label style="font-weight:400"><input type="checkbox" id="fx-act"' + (c.activa ? ' checked' : '') + '> se genera todos los meses</label></div></div>'
     + (!f0 && abierto ? '<label style="font-size:12.5px"><input type="checkbox" id="fx-sumar" checked> Agregarla también a ' + esc(tarMesNom(abierto)) + ' (mes abierto)</label>' : '')
@@ -651,8 +682,11 @@ function tarFijaForm(id){
     const dia = parseInt(v('fx-dia'), 10), veces = parseInt(v('fx-veces'), 10) || 1;
     if (!v('fx-lista') || !v('fx-tit') || !v('fx-resp') || !(dia >= 1 && dia <= 31)) { $('fx-err').textContent = 'Lista, tarea, responsable y día (1 a 31) son obligatorios.'; return; }
     if (!(veces >= 1 && veces <= 31)) { $('fx-err').textContent = 'Veces por mes: de 1 a 31.'; return; }
+    const rdia = v('fx-rdia') ? parseInt(v('fx-rdia'), 10) : null;
+    if (rdia != null && !(rdia >= 1 && rdia <= 31)) { $('fx-err').textContent = 'Día del registro contable: de 1 a 31 (o vacío).'; return; }
     const fila = { lista: v('fx-lista'), titulo: v('fx-tit'), descripcion: v('fx-desc') || null, responsable: v('fx-resp'), dia_vence: dia, veces,
-      orden: parseInt(v('fx-orden'), 10) || 0, activa: $('fx-act').checked };
+      orden: parseInt(v('fx-orden'), 10) || 0, activa: $('fx-act').checked,
+      dia_registro: rdia, responsable_registro: rdia ? (v('fx-rresp') || null) : null };
     $('fx-ok').disabled = true;
     try {
       const q = f0 ? sb.from(TAR_FIJ_T).update(fila).eq('id', f0.id).select() : sb.from(TAR_FIJ_T).insert(fila).select();
@@ -672,12 +706,12 @@ function tarFijaForm(id){
 /* ---------- Historial y eliminadas (sql/2026-10_tareas_historial.sql): solo supervisión ----------
    La base registra cada modificación o eliminación de tareas y de tareas fijas; las eliminadas se pueden restaurar. */
 const TAR_HCAMPOS = { titulo:'Título', descripcion:'Descripción', lista:'Lista', asignado_a:'Asignada a', responsable:'Responsable', asignado_por:'Asignada por',
-  fecha:'Fecha', vencimiento:'Vence', estado:'Estado', periodo:'Mes', dia_vence:'Vence el día', veces:'Veces / mes', orden:'Orden', activa:'Activa' };
+  fecha:'Fecha', vencimiento:'Vence', estado:'Estado', periodo:'Mes', dia_vence:'Vence el día', veces:'Veces / mes', orden:'Orden', activa:'Activa', reg_estado:'Estado del registro', reg_vencimiento:'Vence el registro', reg_responsable:'Responsable del registro', dia_registro:'Registro: día', responsable_registro:'Registro: responsable' };
 function tarHVal(k, v){
   if (v == null || v === '') return '—';
-  if (['asignado_a','responsable','asignado_por'].includes(k)) return tarNom(v);
-  if (k === 'estado') return TAR_EST[v] || v;
-  if (k === 'fecha' || k === 'vencimiento') return fmtFecha(v);
+  if (['asignado_a','responsable','asignado_por','reg_responsable','responsable_registro'].includes(k)) return tarNom(v);
+  if (k === 'estado' || k === 'reg_estado') return TAR_EST[v] || v;
+  if (k === 'fecha' || k === 'vencimiento' || k === 'reg_vencimiento') return fmtFecha(v);
   if (k === 'periodo') return tarMesNom(v);
   if (k === 'activa') return v ? 'Sí' : 'No';
   return String(v);
@@ -791,7 +825,7 @@ function tarTransferir(id){
 }
 function tarDetalle(id){
   const t = TAR.lista.find(x => x.id === id); if (!t) return;
-  const edita = tarPuedeEditar(t), cambiaEstado = edita || t.asignado_a === SP.uid || tarResp(t) === SP.uid;
+  const edita = tarPuedeEditar(t), cambiaEstado = edita || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid;
   const coms = TAR.com.filter(c => c.tarea_id === id).sort((a,b) => String(a.creado_en).localeCompare(String(b.creado_en)));
   const adjs = TAR.adj.filter(a => a.tarea_id === id);
   const cuandoT = ts => { const d = new Date(ts); return isNaN(d) ? '' : d.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
@@ -803,6 +837,11 @@ function tarDetalle(id){
     + '<div class="frow" style="margin-top:10px"><div class="field"><label>Estado</label>' + (cambiaEstado
         ? '<select id="td-est" style="max-width:220px">' + Object.entries(TAR_EST).map(([k,l]) => '<option value="' + k + '"' + (t.estado === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>'
         : '<span class="badge ' + (TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(TAR_EST[t.estado]) + '</span>') + (t.completada_en ? ' <span class="muted" style="font-size:12px">hecha el ' + cuandoT(t.completada_en) + '</span>' : '') + '</div></div>'
+    + (t.reg_estado ? '<div class="frow c3" style="margin-top:4px"><div><div class="muted" style="font-size:11px">REGISTRO CONTABLE · RESPONSABLE</div><b>' + esc(tarNom(t.reg_responsable || t.asignado_a)) + '</b></div>'
+        + '<div><div class="muted" style="font-size:11px">REGISTRO · VENCE</div>' + (t.reg_vencimiento ? fmtFecha(t.reg_vencimiento) : '—') + '</div>'
+        + '<div class="field"><label>Estado del registro</label>' + (cambiaEstado
+          ? '<select id="td-rest" style="max-width:220px">' + Object.entries(TAR_EST).map(([k,l]) => '<option value="' + k + '"' + (t.reg_estado === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>'
+          : '<span class="badge ' + (TAR_BADGE[t.reg_estado] || 'b-gris') + '">' + esc(TAR_EST[t.reg_estado]) + '</span>') + '</div></div>' : '')
     + (t.descripcion ? '<div class="box" style="white-space:pre-wrap;margin:6px 0 12px">' + esc(t.descripcion) + '</div>' : '')
     + '<h4 style="margin:12px 0 6px">Adjuntos (' + adjs.length + ')</h4>'
     + (adjs.length ? '<div class="hist" style="max-height:180px">' + adjs.map(a => '<div class="it">📎 <a href="#" data-td-bajar="' + a.id + '">' + esc(a.nombre) + '</a> <span class="muted">' + kb(a.tamano) + ' · ' + esc(tarNom(a.subido_por)) + ' · ' + cuandoT(a.creado_en) + '</span>'
@@ -824,6 +863,9 @@ function tarDetalle(id){
       const { data, error } = await sb.from(TAR_T).delete().eq('id', id).select('id'); if (error) throw error; if (!data || !data.length) throw new Error('solo supervisión puede eliminar tareas.');
       TAR.lista = TAR.lista.filter(x => x.id !== id); TAR.com = TAR.com.filter(c => c.tarea_id !== id); TAR.adj = TAR.adj.filter(a => a.tarea_id !== id);
       cerrarModal(); toast('Tarea eliminada (archivada en el historial)'); TAR.cargado = false; tarCargar(); } catch (e) { err('No se pudo: ' + (e.message || e)); } });
+  if ($('td-rest')) $('td-rest').addEventListener('change', async e => {
+    try { const { data, error } = await sb.from(TAR_T).update({ reg_estado: e.target.value }).eq('id', id).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso.');
+      TAR.lista[TAR.lista.indexOf(t)] = data[0]; toast('Registro contable: ' + TAR_EST[data[0].reg_estado]); tarRender(); tarDetalle(id); } catch (x) { err('No se guardó: ' + (x.message || x)); } });
   if ($('td-est')) $('td-est').addEventListener('change', async e => {
     try { const { data, error } = await sb.from(TAR_T).update({ estado: e.target.value }).eq('id', id).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso.');
       TAR.lista[TAR.lista.indexOf(t)] = data[0]; toast('Estado: ' + TAR_EST[data[0].estado]); tarRender(); tarDetalle(id); } catch (x) { err('No se guardó: ' + (x.message || x)); } });
