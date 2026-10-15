@@ -368,6 +368,9 @@ const TAR = { cargado:false, err:'', lista:[], com:[], adj:[], usuarios:[], sup:
 const TAR_HIST_T = 'adminfin_tareas_historial';
 const TAR_FIJ_T = 'adminfin_tareas_fijas', TAR_MES_T = 'adminfin_tareas_meses';
 const TAR_EST = { pendiente:'Pendiente', en_curso:'En curso', hecha:'Hecha' };
+const TAR_ALIAS = {   // nombre a mostrar por mail de login (pedido de dirección, oct 2026)
+  'administracion@4housing.com.ar': 'Carranza, A.', 'proveedores@4housing.com.ar': 'Quiencke, V.',
+  'facturacion@4housing.com.ar': 'Cittar, S.', 'micaela@4housing.com.ar': 'Seoane, M.' };
 const TAR_BADGE = { pendiente:'b-ambar', en_curso:'b-azul', hecha:'b-verde' };
 const tarNom = id => { const u = TAR.usuarios.find(x => x.id === id); return u ? (u.nombre || u.email) : (id === SP.uid ? 'Yo' : '—'); };
 const tarVencida = t => t.estado !== 'hecha' && t.vencimiento && String(t.vencimiento) < hoyISO();
@@ -380,7 +383,10 @@ async function tarCargar(){
     const [lista, com, adj, us, sup] = await Promise.all([selTodo(TAR_T, '*', 'id'), selTodo(TAR_COM_T, '*', 'id'), selTodo(TAR_ADJ_T, '*', 'id'),
       sb.rpc('adminfin_tareas_usuarios'), sb.rpc('adminfin_tareas_es_supervisor')]);
     if (us.error) throw us.error; if (sup.error) throw sup.error;
-    Object.assign(TAR, { lista, com, adj, usuarios: us.data || [], sup: !!sup.data, err:'', cargado:true });
+    // nombres a mostrar en Tareas (formato "Apellido, I." como en OGs), por mail de login
+    const usuarios = (us.data || []).map(u => Object.assign({}, u, { nombre: TAR_ALIAS[String(u.email || '').toLowerCase()] || u.nombre }))
+      .sort((a, b) => String(a.nombre || a.email).localeCompare(String(b.nombre || b.email), 'es'));
+    Object.assign(TAR, { lista, com, adj, usuarios, sup: !!sup.data, err:'', cargado:true });
     // tareas fijas mensuales (sql/2026-10_tareas_fijas.sql): si falta correrlo, el resto de Tareas sigue andando
     try { const [fijas, meses] = await Promise.all([selTodo(TAR_FIJ_T, '*', 'orden'), selTodo(TAR_MES_T, '*', 'periodo')]); Object.assign(TAR, { fijas, meses, errFij:'' }); }
     catch (e) { Object.assign(TAR, { fijas:[], meses:[], errFij: e.message || String(e) }); }
