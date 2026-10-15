@@ -29,6 +29,10 @@ Solapas:
   (sábado/domingo → lunes) y veces por mes; se carga con las listas de los Excel «Seguimiento de hábitos». Supervisión
   abre el primer mes; el mes se cierra solo con todas las tareas hechas y al cerrarlo se generan las del siguiente.
   Solapa «Tareas del mes»: avance por lista y por responsable, evolución mensual y tilde rápido de «Hecha».
+  **Historial y eliminadas** (`sql/2026-10_tareas_historial.sql`, solo supervisión): la base registra cada modificación
+  y eliminación (tareas y tareas fijas); las eliminadas se archivan con comentarios y adjuntos y se pueden restaurar.
+  Eliminar tareas y agregar / modificar / transferir tareas del mes: solo supervisión. Para asignar aparecen solo
+  quienes tengan «Tareas» tildado en el portal.
 - **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
   `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
   edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
