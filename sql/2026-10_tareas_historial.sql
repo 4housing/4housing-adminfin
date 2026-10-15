@@ -124,7 +124,7 @@ begin
   return query
     select p.id, p.nombre::text, p.email::text from public.perfiles p
      where p.activo and exists (select 1 from public.perfiles_sector ps where ps.perfil_id = p.id and ps.sector = 'adminfin'::public.sector_portal
-             and jsonb_typeof(ps.permisos -> 'ver') = 'array' and (ps.permisos -> 'ver') ? 'tareas')
+             and (p.es_direccion or (jsonb_typeof(ps.permisos -> 'ver') = 'array' and (ps.permisos -> 'ver') ? 'tareas')))
      order by coalesce(p.nombre, p.email);
 end $$;
 
