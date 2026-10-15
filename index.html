@@ -583,12 +583,34 @@ function tarRenderFijas(tabs){
   $main.innerHTML = tabs
     + (faltan ? '<div class="box" style="margin-bottom:14px;border-color:#e3c48c;background:#fbf4e6">⚠ <b>' + faltan + '</b> tarea(s) activa(s) sin responsable o día de vencimiento (marcadas en rojo). Sin eso no se puede generar el mes.</div>' : '')
     + '<div class="card">' + cardH('Tareas fijas mensuales', ed ? 'Los cambios valen para los meses que se generen <b>de acá en adelante</b>; el mes abierto no cambia. Vencimiento: ese día de cada mes (si cae sábado o domingo, el lunes siguiente).' : 'Solo supervisión edita la plantilla.')
+    + (ed ? '<div class="tools" style="padding:10px 14px 0;flex-wrap:wrap;gap:8px"><b style="font-size:12.5px">Completar en bloque</b>'
+      + '<span class="muted" style="font-size:12px">a las ' + base.length + ' tarea(s) de ' + (TAR.fijLista ? '«' + esc(TAR.fijLista) + '»' : 'todas las listas') + ':</span>'
+      + '<select class="tc-in" style="width:auto;text-align:left" id="tfb-resp"><option value="">Responsable (no cambiar)</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '">' + esc(u.nombre || u.email) + '</option>').join('') + '</select>'
+      + '<input type="number" min="1" max="31" class="tc-in" style="width:110px" id="tfb-dia" placeholder="Día (1-31)">'
+      + '<label style="font-size:12.5px"><input type="checkbox" id="tfb-vacias" checked> solo donde está vacío</label>'
+      + '<button class="btn ghost sm" id="tfb-ok">Aplicar</button></div>' : '')
     + '<div class="chips" style="padding:8px 14px 0">' + chip('', 'Todas (' + TAR.fijas.length + ')') + listas.map(l => chip(l, l + ' (' + TAR.fijas.filter(f => f.lista === l).length + ')')).join('') + '</div>'
     + tablaHerramientas('tarf', 'Buscar tarea, lista, responsable…') + tablaHtml('tarf', cols, fl, '', f => f.activa ? '' : 'muted') + '</div>';
   tablaEventos();
   $main.querySelectorAll('[data-tf-lista]').forEach(b => b.addEventListener('click', () => { TAR.fijLista = b.dataset.tfLista; tarRender(); }));
   $main.querySelectorAll('[data-tf-ed]').forEach(b => b.addEventListener('click', () => tarFijaForm(+b.dataset.tfEd)));
   const b0 = document.getElementById('tf-nueva'); if (b0) b0.addEventListener('click', () => tarFijaForm(null));
+  const bb = document.getElementById('tfb-ok'); if (bb) bb.addEventListener('click', async () => {
+    const resp = document.getElementById('tfb-resp').value, diaTxt = document.getElementById('tfb-dia').value.trim(), vac = document.getElementById('tfb-vacias').checked;
+    const dia = diaTxt ? parseInt(diaTxt, 10) : null;
+    if (!resp && !diaTxt) { toast('Elegí un responsable y/o un día'); return; }
+    if (diaTxt && !(dia >= 1 && dia <= 31)) { toast('El día tiene que ser de 1 a 31'); return; }
+    let n = 0, fallas = 0;
+    for (const f of base) {
+      const cambio = {};
+      if (resp && (!vac || !f.responsable)) cambio.responsable = resp;
+      if (dia && (!vac || !f.dia_vence)) cambio.dia_vence = dia;
+      if (!Object.keys(cambio).length) continue;
+      const { data, error } = await sb.from(TAR_FIJ_T).update(cambio).eq('id', f.id).select();
+      if (error || !data || !data.length) { fallas++; continue; }
+      TAR.fijas[TAR.fijas.indexOf(f)] = data[0]; n++;
+    }
+    toast(n + ' tarea(s) fija(s) actualizada(s)' + (fallas ? ' · ⚠ ' + fallas + ' sin guardar' : '')); tarRender(); });
   $main.querySelectorAll('[data-tfx]').forEach(inp => inp.addEventListener('change', async () => {
     const [id, campo] = inp.dataset.tfx.split('|'), f = TAR.fijas.find(x => x.id === +id);
     let v = inp.type === 'checkbox' ? inp.checked : inp.value.trim() || null;
