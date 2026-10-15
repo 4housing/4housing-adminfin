@@ -33,6 +33,8 @@ Solapas:
   y eliminación (tareas y tareas fijas); las eliminadas se archivan con comentarios y adjuntos y se pueden restaurar.
   Eliminar tareas y agregar / modificar / transferir tareas del mes: solo supervisión. Para asignar aparecen solo
   quienes tengan «Tareas» tildado en el portal.
+  **Registro contable** (`sql/2026-10_tareas_registro.sql`): una tarea fija puede tener una segunda etapa (día y
+  responsable propios). Estados: Pendiente / En gestión / Cumplido; la tarea se cumple con las dos etapas cumplidas.
 - **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
   `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
   edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
