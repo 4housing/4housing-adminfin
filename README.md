@@ -25,6 +25,10 @@ Solapas:
   SQL: `sql/2026-10_tareas.sql` (tablas, bucket privado `adminfin-tareas` y permisos) y después
   `sql/2026-10_adminfin_secciones.sql` y `sql/2026-10_tareas_responsable.sql` (responsable + transferir: el responsable no
   cambia al transferir la tarea; queda un comentario automático por cada transferencia).
+  **Tareas fijas mensuales** (`sql/2026-10_tareas_fijas.sql`): plantilla con lista, responsable, día de vencimiento
+  (sábado/domingo → lunes) y veces por mes; se carga con las listas de los Excel «Seguimiento de hábitos». Supervisión
+  abre el primer mes; el mes se cierra solo con todas las tareas hechas y al cerrarlo se generan las del siguiente.
+  Solapa «Tareas del mes»: avance por lista y por responsable, evolución mensual y tilde rápido de «Hecha».
 - **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
   `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
   edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
