@@ -369,8 +369,8 @@ const TAR_HIST_T = 'adminfin_tareas_historial';
 const TAR_FIJ_T = 'adminfin_tareas_fijas', TAR_MES_T = 'adminfin_tareas_meses';
 const TAR_EST = { pendiente:'Pendiente', en_curso:'En curso', hecha:'Hecha' };
 const TAR_ALIAS = {   // nombre a mostrar por mail de login (pedido de dirección, oct 2026)
-  'administracion@4housing.com.ar': 'Carranza, A.', 'proveedores@4housing.com.ar': 'Quiencke, V.',
-  'facturacion@4housing.com.ar': 'Cittar, S.', 'micaela@4housing.com.ar': 'Seoane, M.' };
+  'administracion@4housing.com.ar': 'Carranza, A.', 'valentinaquiencke@4housing.com.ar': 'Quiencke, V.',
+  'facturacion@4housing.com.ar': 'Cittar, S.', 'micaela@4housing.com.ar': 'Seoane, M.', 'proveedores@4housing.com.ar': 'Tesouro, S.' };
 const TAR_BADGE = { pendiente:'b-ambar', en_curso:'b-azul', hecha:'b-verde' };
 const tarNom = id => { const u = TAR.usuarios.find(x => x.id === id); return u ? (u.nombre || u.email) : (id === SP.uid ? 'Yo' : '—'); };
 const tarVencida = t => t.estado !== 'hecha' && t.vencimiento && String(t.vencimiento) < hoyISO();
