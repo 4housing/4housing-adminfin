@@ -37,6 +37,9 @@ Solapas:
   responsable propios). Estados: Pendiente / En gestión / Cumplido; la tarea se cumple con las dos etapas cumplidas.
   **Vencimientos** (`sql/2026-10_tareas_vencimientos.sql`): «Día» fijo o «Hábil n°», en el mes siguiente al cierre
   (o el mismo); sábados, domingos y feriados (tabla `adminfin_feriados`, se cargan en Tareas fijas) no son hábiles.
+  **Tipos** (`sql/2026-10_tareas_tipos.sql`): Proveedores → estado «Pagado» con fecha de pago (propone hoy); Impuestos →
+  lista con vto de pago obligatorio (Pagado + fecha) y la tarea «Registrado»; bancos y tarjetas en 2 tareas (Cargar FAC
+  de gastos / Conciliar); ▲▼ para ordenar la plantilla. `sql/2026-10_tareas_reiniciar_prueba.sql` borra el mes de prueba.
 - **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
   `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
   edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
