@@ -655,7 +655,8 @@ function tarRenderFijas(tabs){
   const venTd = (f, cDia, cTipo, cMes, oblig) => { const vto = tarVence(pej, f[cDia], f[cTipo], f[cMes]);
     if (!oblig && !f[cDia]) return '<div class="tet">' + inDia(f, cDia, false) + '<span class="muted" style="font-size:11.5px">sin registro</span></div>';
     return '<div class="tet">' + selX(f, cTipo, [['dia', 'Día'], ['habil', 'Hábil n°']]) + inDia(f, cDia, oblig && !f[cDia])
-      + selX(f, cMes, [[1, 'mes sig.'], [0, 'mismo mes']]) + '<span class="tet-v" title="Vencimiento para el ' + esc(tarCierreNom(pej).toLowerCase()) + '">' + (vto ? '→ ' + fmtCorta(vto) : '') + '</span></div>'; };
+      + selX(f, cMes, [[1, 'mes sig.'], [0, 'mismo mes']]) + '<span class="tet-v" title="Vencimiento para el ' + esc(tarCierreNom(pej).toLowerCase()) + '">' + (vto ? '→ ' + fmtCorta(vto) : '') + '</span>'
+      + (!oblig && ed ? '<button class="iconbtn del" title="Quitar el registro contable de esta tarea" data-tf-noreg="' + f.id + '">✕</button>' : '') + '</div>'; };
   const cols = [
     { id:'lista', t:'Lista', v:f => f.lista, td:f => esc(f.lista) },
     { id:'tit', t:'Tarea', s:f => f.titulo, cls:'wrap', td:f => '<b>' + esc(f.titulo) + '</b>' + (f.descripcion ? '<div class="muted" style="font-size:11.5px">' + esc(f.descripcion) + '</div>' : '') },
@@ -693,6 +694,11 @@ function tarRenderFijas(tabs){
   $main.querySelectorAll('[data-tf-lista]').forEach(b => b.addEventListener('click', () => { TAR.fijLista = b.dataset.tfLista; tarRender(); }));
   $main.querySelectorAll('[data-tf-ed]').forEach(b => b.addEventListener('click', () => tarFijaForm(+b.dataset.tfEd)));
   const b0 = document.getElementById('tf-nueva'); if (b0) b0.addEventListener('click', () => tarFijaForm(null));
+  $main.querySelectorAll('[data-tf-noreg]').forEach(b => b.addEventListener('click', async () => {
+    const f = TAR.fijas.find(x => x.id === +b.dataset.tfNoreg); if (!f || !confirm('¿Quitar el registro contable de "' + f.titulo + '"?')) return;
+    const { data, error } = await sb.from(TAR_FIJ_T).update({ dia_registro: null, responsable_registro: null }).eq('id', f.id).select();
+    if (error || !data || !data.length) { toast('No se guardó: ' + ((error && error.message) || 'sin permiso')); return; }
+    TAR.fijas[TAR.fijas.indexOf(f)] = data[0]; toast('Registro contable quitado'); tarRender(); }));
   const fo = document.getElementById('tfer-ok'); if (fo) fo.addEventListener('click', async () => {
     const fecha = document.getElementById('tfer-f').value, nombre = document.getElementById('tfer-n').value.trim() || null;
     if (!fecha) { toast('Elegí la fecha del feriado'); return; }
@@ -745,8 +751,8 @@ function tarFijaForm(id){
     + inp('fx-veces', 'Veces por mes', c.veces, ' type="number" min="1" max="31"') + '</div>'
     + '<div class="frow c3">' + selF('fx-tipo', 'Vencimiento (pago / tarea) *', [['dia', 'Día fijo'], ['habil', 'Día hábil n°']], c.tipo_vence || 'dia')
     + inp('fx-dia', 'Día / n° de día hábil *', c.dia_vence, ' type="number" min="1" max="31"') + selF('fx-mes', 'Mes', [[1, 'Mes siguiente al cierre'], [0, 'Mismo mes del cierre']], c.mes_vence == null ? 1 : c.mes_vence) + '</div>'
-    + '<div class="frow c3">' + selF('fx-rtipo', 'Registro contable (opcional)', [['dia', 'Día fijo'], ['habil', 'Día hábil n°']], c.tipo_registro || 'dia')
-    + inp('fx-rdia', 'Día / n° de día hábil (vacío = sin registro)', c.dia_registro, ' type="number" min="1" max="31"') + selF('fx-rmes', 'Mes', [[1, 'Mes siguiente al cierre'], [0, 'Mismo mes del cierre']], c.mes_registro == null ? 1 : c.mes_registro) + '</div>'
+    + '<div class="frow c3">' + selF('fx-rtipo', 'Registro contable', [['', 'Sin registro contable'], ['dia', 'Día fijo'], ['habil', 'Día hábil n°']], c.dia_registro ? (c.tipo_registro || 'dia') : '')
+    + inp('fx-rdia', 'Día / n° de día hábil del registro', c.dia_registro, ' type="number" min="1" max="31"') + selF('fx-rmes', 'Mes', [[1, 'Mes siguiente al cierre'], [0, 'Mismo mes del cierre']], c.mes_registro == null ? 1 : c.mes_registro) + '</div>'
     + '<div class="frow c3"><div class="field"><label>Registro contable: responsable</label><select id="fx-rresp"><option value="">(el mismo)</option>' + tarOpcUsuarios(c.responsable_registro) + '</select></div></div>'
     + '<div class="frow c3">' + inp('fx-orden', 'Orden', c.orden != null ? c.orden : (Math.max(0, ...TAR.fijas.map(f => f.orden || 0)) + 1), ' type="number"')
     + '<div class="field"><label>Activa</label><label style="font-weight:400"><input type="checkbox" id="fx-act"' + (c.activa ? ' checked' : '') + '> se genera todos los meses</label></div></div>'
@@ -754,6 +760,8 @@ function tarFijaForm(id){
     + '<div class="err" id="fx-err"></div>',
     (f0 ? '<button class="btn ghost" id="fx-del" style="margin-right:auto">Eliminar</button>' : '') + '<button class="btn ghost" id="fx-no">Cancelar</button><button class="btn" id="fx-ok">Guardar</button>', 'wide');
   const $ = i => document.getElementById(i), v = i => $(i).value.trim();
+  const regOn = () => { const on = !!$('fx-rtipo').value; ['fx-rdia', 'fx-rmes', 'fx-rresp'].forEach(i => { $(i).disabled = !on; }); if (!on) $('fx-rdia').value = ''; };
+  $('fx-rtipo').addEventListener('change', regOn); regOn();
   $('fx-no').addEventListener('click', cerrarModal);
   if ($('fx-del')) $('fx-del').addEventListener('click', async () => {
     if (!confirm('¿Eliminar "' + f0.titulo + '" de la plantilla? Las tareas ya generadas (meses anteriores y el abierto) quedan. Queda archivada en "Historial y eliminadas".')) return;
@@ -764,12 +772,12 @@ function tarFijaForm(id){
     const dia = parseInt(v('fx-dia'), 10), veces = parseInt(v('fx-veces'), 10) || 1;
     if (!v('fx-lista') || !v('fx-tit') || !v('fx-resp') || !(dia >= 1 && dia <= 31)) { $('fx-err').textContent = 'Lista, tarea, responsable y día (1 a 31) son obligatorios.'; return; }
     if (!(veces >= 1 && veces <= 31)) { $('fx-err').textContent = 'Veces por mes: de 1 a 31.'; return; }
-    const rdia = v('fx-rdia') ? parseInt(v('fx-rdia'), 10) : null;
-    if (rdia != null && !(rdia >= 1 && rdia <= 31)) { $('fx-err').textContent = 'Día del registro contable: de 1 a 31 (o vacío).'; return; }
+    const rdia = v('fx-rtipo') && v('fx-rdia') ? parseInt(v('fx-rdia'), 10) : null;   // "Sin registro contable" lo quita
+    if (v('fx-rtipo') && !(rdia >= 1 && rdia <= 31)) { $('fx-err').textContent = 'Día del registro contable: de 1 a 31 (o elegí "Sin registro contable").'; return; }
     const fila = { lista: v('fx-lista'), titulo: v('fx-tit'), descripcion: v('fx-desc') || null, responsable: v('fx-resp'), dia_vence: dia, veces,
       orden: parseInt(v('fx-orden'), 10) || 0, activa: $('fx-act').checked,
       dia_registro: rdia, responsable_registro: rdia ? (v('fx-rresp') || null) : null,
-      tipo_vence: v('fx-tipo'), mes_vence: +v('fx-mes'), tipo_registro: v('fx-rtipo'), mes_registro: +v('fx-rmes') };
+      tipo_vence: v('fx-tipo'), mes_vence: +v('fx-mes'), tipo_registro: v('fx-rtipo') || 'dia', mes_registro: +v('fx-rmes') };
     $('fx-ok').disabled = true;
     try {
       const q = f0 ? sb.from(TAR_FIJ_T).update(fila).eq('id', f0.id).select() : sb.from(TAR_FIJ_T).insert(fila).select();
