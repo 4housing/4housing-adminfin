@@ -35,6 +35,8 @@ Solapas:
   quienes tengan «Tareas» tildado en el portal.
   **Registro contable** (`sql/2026-10_tareas_registro.sql`): una tarea fija puede tener una segunda etapa (día y
   responsable propios). Estados: Pendiente / En gestión / Cumplido; la tarea se cumple con las dos etapas cumplidas.
+  **Vencimientos** (`sql/2026-10_tareas_vencimientos.sql`): «Día» fijo o «Hábil n°», en el mes siguiente al cierre
+  (o el mismo); sábados, domingos y feriados (tabla `adminfin_feriados`, se cargan en Tareas fijas) no son hábiles.
 - **Permisos por sección** (desde la pantalla Usuarios del portal, `SECCIONES.adminfin` en `portal/admin.html`):
   `solicitudes`, `cuy`, `tareas`, `tareas_todas` (supervisión). La app oculta lo que no se ve y bloquea lo que no se
   edita; en Tareas además lo controla la base (`adminfin_puede_ver` / `adminfin_puede_editar`).
