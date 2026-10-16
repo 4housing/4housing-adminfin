@@ -122,6 +122,7 @@ a.lnk:hover{text-decoration:underline;}
 table.grid[data-tbl="tarf"], table.grid[data-tbl="tarm"]{width:auto;min-width:0;}
 table.grid[data-tbl="tarf"] td.wrap, table.grid[data-tbl="tarm"] td.wrap{max-width:300px;min-width:150px;}
 table.grid[data-tbl="tarf"] td, table.grid[data-tbl="tarf"] th{padding-left:6px;padding-right:6px;}
+.tfecha{cursor:pointer;white-space:nowrap;} .tfecha:hover{text-decoration:underline;}
 .tet{display:flex;align-items:center;gap:8px;white-space:nowrap;font-size:12.5px;}
 .tet-q{min-width:92px;}
 .tet-v{min-width:40px;color:var(--muted);}
@@ -558,18 +559,23 @@ function tarRenderMes(tabs){
   const ley = '<div class="tleg">' + TAR_AV.map(([, l, c]) => '<span><i style="background:' + c + '"></i>' + l + '</span>').join('') + '</div>';
   // tabla
   const verTodo = TAR.mesVer === 'todas', filas = xs.filter(t => verTodo || !tarHecha(t))
-    .sort((a, b) => ordLista(a.lista) - ordLista(b.lista) || String(a.vencimiento || '').localeCompare(String(b.vencimiento || '')) || a.id - b.id);
+    .sort((a, b) => String(a.vencimiento || '9999').localeCompare(String(b.vencimiento || '9999')) || ordLista(a.lista) - ordLista(b.lista) || a.id - b.id);
   const puedeEst = t => tarPuedeEditar(t) || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid;
   const selEst = (t, campo) => { const v = t[campo], ok = puedeEst(t) && !cerrado;
     return '<select class="tc-in tst-' + v + '" style="width:auto;text-align:left" data-tm-est="' + t.id + '|' + campo + '"' + (ok ? '' : ' disabled') + '>'
       + Object.entries(TAR_EST).map(([k, l]) => '<option value="' + k + '"' + (v === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>'; };
-  const etapaTd = (t, quien, venc, campo) => '<div class="tet"><span class="tet-q">' + esc(tarNom(quien)) + '</span><span class="tet-v' + (t[campo] !== 'hecha' && venc && String(venc) < hoyISO() ? ' warn' : '') + '">'
-    + (venc ? fmtCorta(venc) : '—') + '</span>' + selEst(t, campo) + '</div>';
+  // fecha de vencimiento del mes: la calcula la plantilla; supervisión la puede ajustar para este mes (clic en la fecha)
+  const fechaTd = (t, campo, estCampo) => { const v = t[campo], venc = t[estCampo] !== 'hecha' && v && String(v) < hoyISO();
+    const txt = '<span class="' + (venc ? 'warn' : '') + '" style="font-weight:600">' + (v ? fmtCorta(v) : '—') + '</span>';
+    return TAR.sup && !cerrado ? '<span class="tfecha" title="Ajustar la fecha para este mes" data-tm-fed="' + t.id + '|' + campo + '|' + (v || '') + '">' + txt + ' <span class="muted">✎</span></span>' : txt; };
   const cols = [
-    { id:'lista', t:'Lista', v:t => t.lista || 'Sin lista', td:t => esc(t.lista || '—') },
+    { id:'vence', t:'Vence', fecha:t => t.vencimiento, td:t => fechaTd(t, 'vencimiento', 'estado') },
+    { id:'lista', t:'Lista', v:t => t.lista || 'Sin lista', td:t => '<span class="muted" style="font-size:11.5px">' + esc(t.lista || '—') + '</span>' },
     { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? ' <span class="muted">· ' + esc(t.descripcion) + '</span>' : '') },
-    { id:'a', t:'Pago / tarea · responsable, vence, estado', v:t => tarNom(t.asignado_a), fecha:t => t.vencimiento, td:t => etapaTd(t, t.asignado_a, t.vencimiento, 'estado') },
-    { id:'reg', t:'Registro contable', v:t => t.reg_estado ? tarNom(t.reg_responsable || t.asignado_a) : '—', td:t => t.reg_estado ? etapaTd(t, t.reg_responsable || t.asignado_a, t.reg_vencimiento, 'reg_estado') : '<span class="muted">—</span>' },
+    { id:'a', t:'Responsable', v:t => tarNom(t.asignado_a), td:t => esc(tarNom(t.asignado_a)) },
+    { id:'e1', t:'Estado', v:t => TAR_EST[t.estado], td:t => selEst(t, 'estado') },
+    { id:'reg', t:'Registro contable · vence, responsable, estado', v:t => t.reg_estado ? tarNom(t.reg_responsable || t.asignado_a) : '—', fecha:t => t.reg_vencimiento,
+      td:t => t.reg_estado ? '<div class="tet">' + fechaTd(t, 'reg_vencimiento', 'reg_estado') + '<span class="tet-q">' + esc(tarNom(t.reg_responsable || t.asignado_a)) + '</span>' + selEst(t, 'reg_estado') + '</div>' : '<span class="muted">—</span>' },
     { id:'est', t:'Avance', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)); return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '">' + a[1] + '</span>'; } },
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
   ];
@@ -599,6 +605,20 @@ function tarMesEventos(){
   if ($('tm-ver')) $('tm-ver').addEventListener('change', e => { TAR.mesVer = e.target.value; tarRender(); });
   if ($('tm-agregar')) $('tm-agregar').addEventListener('click', () => tarForm(null, TAR.per));
   $main.querySelectorAll('[data-tr-ver]').forEach(b => b.addEventListener('click', () => tarDetalle(+b.dataset.trVer)));
+  $main.querySelectorAll('[data-tm-fed]').forEach(sp => sp.addEventListener('click', () => {
+    if (sp.querySelector('input')) return;
+    const [id, campo, v] = sp.dataset.tmFed.split('|');
+    sp.innerHTML = '<input type="date" class="tc-in" style="width:auto" value="' + v + '">'; const inp = sp.querySelector('input'); inp.focus();
+    let hecho = false;
+    const guardar = async () => { if (hecho) return; hecho = true;
+      if (!inp.value || inp.value === v) { tarRender(); return; }
+      if (!/^20\d\d-\d\d-\d\d$/.test(inp.value)) { toast('Fecha inválida'); tarRender(); return; }
+      const { data, error } = await sb.from(TAR_T).update({ [campo]: inp.value }).eq('id', +id).select();
+      if (error || !data || !data.length) { toast('No se guardó: ' + ((error && error.message) || 'sin permiso')); tarRender(); return; }
+      const i = TAR.lista.findIndex(t => t.id === +id); if (i >= 0) TAR.lista[i] = data[0]; toast('Vencimiento ajustado: ' + fmtCorta(inp.value)); tarRender(); };
+    // se guarda al salir del campo o con Enter (no en cada tecla: el año se escribe de a un dígito)
+    inp.addEventListener('blur', () => setTimeout(guardar, 150));
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') guardar(); if (e.key === 'Escape') { hecho = true; tarRender(); } }); }));
   $main.querySelectorAll('[data-tm-est]').forEach(b => b.addEventListener('change', async () => {
     const [id, campo] = b.dataset.tmEst.split('|'); b.disabled = true;
     const { data, error } = await sb.from(TAR_T).update({ [campo]: b.value }).eq('id', +id).select();
