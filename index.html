@@ -410,7 +410,19 @@ async function tarCargar(){
   } catch (e) { TAR.err = e.message || String(e); TAR.cargado = true; }
   if (VISTA === 'tar') tarRender();
 }
+// Igual que en Contabilidad UY: al volver a dibujar la MISMA vista (después de guardar un cambio) se mantiene el scroll
+// de la página y el de cada tabla; si cambió la solapa / el mes / la lista, arranca desde arriba.
+let TAR_VISTA = '';
 function tarRender(){
+  const vista = [TAR.modo, TAR.per, TAR.fijLista, TAR.vista, TAR.estado, TAR.mesVer, TAR.histVer].join('|'), misma = vista === TAR_VISTA;
+  const y = window.scrollY, x = window.scrollX, tablas = misma ? [...$main.querySelectorAll('.tbl-hscroll')].map(t => [t.scrollTop, t.scrollLeft]) : [];
+  TAR_VISTA = vista;
+  tarRender0();
+  if (!misma) return;
+  $main.querySelectorAll('.tbl-hscroll').forEach((t, i) => { if (tablas[i]) { t.scrollTop = tablas[i][0]; t.scrollLeft = tablas[i][1]; } });
+  window.scrollTo(x, y);
+}
+function tarRender0(){
   const ta = document.getElementById('topActions'); ta.innerHTML = '';
   if (TAR.err) { $main.innerHTML = '<div class="card"><div class="empty">No pude leer las tareas: ' + esc(TAR.err) + '<br><span class="muted">Falta correr sql/2026-10_tareas.sql en Supabase.</span></div></div>'; return; }
   const m = (id, l) => '<button class="mtab' + (TAR.modo === id ? ' active' : '') + '" data-tr-modo="' + id + '">' + l + '</button>';
