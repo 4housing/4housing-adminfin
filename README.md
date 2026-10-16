@@ -33,7 +33,7 @@ Solapas:
   y eliminación (tareas y tareas fijas); las eliminadas se archivan con comentarios y adjuntos y se pueden restaurar.
   Eliminar tareas y agregar / modificar / transferir tareas del mes: solo supervisión. Para asignar aparecen solo
   quienes tengan «Tareas» tildado en el portal.
-  **Registro contable** (`sql/2026-10_tareas_registro.sql`): una tarea fija puede tener una segunda etapa (día y
+  **Vto de pago** (`sql/2026-10_tareas_registro.sql`, columnas `reg_*`; impositivos): una tarea fija puede tener un vencimiento de pago (día y
   responsable propios). Estados: Pendiente / En gestión / Cumplido; la tarea se cumple con las dos etapas cumplidas.
   **Vencimientos** (`sql/2026-10_tareas_vencimientos.sql`): «Día» fijo o «Hábil n°», en el mes siguiente al cierre
   (o el mismo); sábados, domingos y feriados (tabla `adminfin_feriados`, se cargan en Tareas fijas) no son hábiles.
