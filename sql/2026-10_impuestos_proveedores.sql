@@ -1,5 +1,5 @@
 -- =====================================================================
--- Administración y Finanzas · Impuestos (presentación / pago / registro contable) y lista Proveedores actualizada (oct 2026)
+-- Administración y Finanzas · Impuestos (presentación / pago / registro contable), Proveedores y Cierre mensual (oct 2026)
 -- Proyecto Supabase: wcpkpwxhqdcdljfwzcmy. Correr A MANO en el SQL Editor, DESPUÉS de sql/2026-10_tareas_tipos.sql,
 -- y ANTES de publicar el index.html con la solapa "Impuestos".
 --
@@ -18,6 +18,15 @@
 --      · Se agregan 15: ARAAGU, BERGER, BINASE, CACMI, CAISSA, CHINNI, CLARO, EPEN, IPLAN, METEL, NOSIS, REPCON, RSV,
 --        SEGUME, SPWORK. Activas, responsable administracion@ (Carranza, A.), vencen el 5° día hábil del mes
 --        siguiente al cierre. Si un proveedor ya está en la lista (mismo nombre), no se duplica.
+--   4) Plantilla, Cierre mensual y Supervisión (planilla de oct 2026): responsable y vencimiento = N° día hábil del mes
+--      siguiente al cierre, para 36 tareas (bancos y tarjetas: sus dos tareas, "· Cargar FAC de gastos" y "· Conciliar").
+--      · Pasan de Supervisión a Cierre mensual: Pendientes de Imputación Compras / Ventas, Control Caja Chica Quartier,
+--        Informe Logística, DTM, Préstamos Bancarios y PÓLIZAS. Informe CPS e Informe PROVEEDORES siguen en Supervisión.
+--      · Banco Comafi: desactivada (queda en la plantilla, no se genera).
+--      · Se BORRAN y NO quedan en el historial: Control Ingresos Logística, Control Ingresos DTM, Informe Préstamos,
+--        Control Imputacion cargos, Informe MM, Informe CPS (la de Cierre mensual), Control Deuda Pólizas, Asiento IIBB/IVA
+--        (Cierre mensual) e Informe imputación contable Mensual (Supervisión).
+--      · La plantilla se renumera: Cierre mensual y Supervisión en el orden de la planilla.
 --   Las tareas del mes ya abierto NO cambian (las de los proveedores sacados siguen ahí; las nuevas aparecen desde el
 --   próximo mes que se abra, o supervisión las suma con "Agregar tarea al mes").
 --
@@ -142,6 +151,88 @@ select 'Proveedores', v.titulo, v.descripcion, p.id, 5, 'habil', 1, 1,
   left join public.perfiles p on lower(p.email) = 'administracion@4housing.com.ar'
  where not exists (select 1 from public.adminfin_tareas_fijas f where f.lista = 'Proveedores' and upper(btrim(f.titulo)) = v.titulo);
 
+-- 4) Cierre mensual y Supervisión
+-- comparación sin mayúsculas, tildes ni espacios de más
+create or replace function pg_temp.nrm(t text) returns text language sql immutable as $f$
+  select translate(lower(btrim(regexp_replace(coalesce(t, ''), '\s+', ' ', 'g'))), 'áéíóúü', 'aeiouu') $f$;
+create temp table _cierre (n int, titulo text, lista_actual text, lista text, email text, dia int) on commit drop;
+insert into _cierre values
+  (1, 'Control de Pendientes de Imputacion Compras', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 1),
+  (2, 'Control de Pendientes de Imputacion Ventas', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 1),
+  (3, 'Control Caja Chica Quartier', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 1),
+  (4, 'Control Ingresos Alquileres', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 1),
+  (5, 'Cargar Alquileres Mes nuevo', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 1),
+  (6, 'Informe Logistica Mensual', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 2),
+  (7, 'Informe DTM Mensual', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 2),
+  (8, 'Informe Prestamos Bancarios', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 2),
+  (9, 'Informe POLIZAS', 'Supervisión', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (10, 'Banco Ciudad', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (11, 'Banco BBVA', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (12, 'Banco BBVA USD', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (13, 'Banco Nacion', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (14, 'Banco Provincia', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (15, 'Banco Comafi', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (16, 'Banco Santander', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (17, 'Banco Galicia', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (18, 'Banco Macro', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (19, 'Banco Macro USD', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (20, 'TC AMEX', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (21, 'TC Visa Galicia', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (22, 'TC Visa Macro', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (23, 'TC Visa BBVA', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (24, 'TC Visa Provincia', 'Cierre mensual', 'Cierre mensual', 'administracion@4housing.com.ar', 5),
+  (25, 'Informe CPS', 'Supervisión', 'Supervisión', 'micaela@4housing.com.ar', 5),
+  (26, 'Informe PROVEEDORES', 'Supervisión', 'Supervisión', 'micaela@4housing.com.ar', 5),
+  (27, 'Caja ARS', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (28, 'Caja USD', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (29, 'Asiento Sueldos', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (30, 'Informe Sueldos', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (31, 'Caja Chica Quartier', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (32, 'Caja Chica Taller', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (33, 'Caja Chica Neuquen', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (34, 'Préstamos Personal', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 5),
+  (35, 'EERR', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 10),
+  (36, 'Informe Financiero', 'Cierre mensual', 'Cierre mensual', 'micaela@4housing.com.ar', 10);
+create temp table _cierre_borrar (lista text, titulo text) on commit drop;
+insert into _cierre_borrar values
+  ('Cierre mensual', 'Control Ingresos Logística'),
+  ('Cierre mensual', 'Control Ingresos DTM'),
+  ('Cierre mensual', 'Informe Préstamos'),
+  ('Cierre mensual', 'Control Imputacion cargos'),
+  ('Cierre mensual', 'Informe MM'),
+  ('Cierre mensual', 'Informe CPS'),
+  ('Cierre mensual', 'Control Deuda Pólizas'),
+  ('Cierre mensual', 'Asiento IIBB/IVA'),
+  ('Supervisión', 'Informe imputación contable Mensual');
+
+update public.adminfin_tareas_fijas f
+   set lista = c.lista, responsable = p.id, dia_vence = c.dia, tipo_vence = 'habil', mes_vence = 1
+  from _cierre c left join public.perfiles p on lower(p.email) = c.email
+ where f.lista = c.lista_actual
+   and (pg_temp.nrm(f.titulo) = pg_temp.nrm(c.titulo) or pg_temp.nrm(f.titulo) like pg_temp.nrm(c.titulo) || ' · %');
+update public.adminfin_tareas_fijas set activa = false where lista = 'Cierre mensual' and pg_temp.nrm(titulo) like 'banco comafi%';
+
+-- borrar sin dejar rastro en el historial (pedido de dirección)
+create temp table _borradas on commit drop as
+  select f.id from public.adminfin_tareas_fijas f join _cierre_borrar b on f.lista = b.lista and pg_temp.nrm(f.titulo) = pg_temp.nrm(b.titulo);
+delete from public.adminfin_tareas_fijas where id in (select id from _borradas);
+delete from public.adminfin_tareas_historial where tabla = 'fija' and accion = 'eliminada' and registro_id in (select id from _borradas);
+
+-- orden: las listas como estaban; dentro de Cierre mensual y Supervisión, el de la planilla; de 10 en 10
+update public.adminfin_tareas_fijas f set orden = x.n * 10
+  from (select y.id, row_number() over (order by y.lmin, y.k, y.orden, y.id) n
+          from (select f2.id, f2.orden, min(f2.orden) over (partition by f2.lista) lmin, coalesce(min(c.n), 1000) k
+                  from public.adminfin_tareas_fijas f2
+                  left join _cierre c on f2.lista = c.lista
+                   and (pg_temp.nrm(f2.titulo) = pg_temp.nrm(c.titulo) or pg_temp.nrm(f2.titulo) like pg_temp.nrm(c.titulo) || ' · %')
+                 group by f2.id, f2.orden, f2.lista) y) x
+ where x.id = f.id;
+
+-- control (antes del commit): filas de la planilla que no encontraron su tarea (tiene que dar vacío)
+select c.n, c.titulo as sin_coincidencia from _cierre c
+ where not exists (select 1 from public.adminfin_tareas_fijas f where f.lista = c.lista
+                     and (pg_temp.nrm(f.titulo) = pg_temp.nrm(c.titulo) or pg_temp.nrm(f.titulo) like pg_temp.nrm(c.titulo) || ' · %'));
+
 commit;
 
 -- Verificación: la columna nueva, y la lista Proveedores (tienen que quedar 27 si la lista estaba como en el alta inicial;
@@ -151,3 +242,5 @@ select titulo, req_presentacion as presentacion, req_pago as pago, req_registro 
 select count(*) as proveedores, count(*) filter (where responsable is null) as sin_responsable,
        string_agg(titulo, ', ' order by orden) as lista
   from public.adminfin_tareas_fijas where lista = 'Proveedores';
+select lista, titulo, (select email from public.perfiles p where p.id = f.responsable) as responsable, dia_vence as dia_habil, activa
+  from public.adminfin_tareas_fijas f where lista in ('Cierre mensual', 'Supervisión') order by orden;
