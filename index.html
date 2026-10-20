@@ -892,7 +892,7 @@ function tarFijaForm(id){
   const inp = (i, l, v, x) => '<div class="field"><label>' + l + '</label><input id="' + i + '" value="' + esc(v == null ? '' : v) + '"' + (x || '') + '></div>';
   const selF = (i, l, ops, v) => '<div class="field"><label>' + l + '</label><select id="' + i + '">' + ops.map(([k, t]) => '<option value="' + k + '"' + (String(v) === String(k) ? ' selected' : '') + '>' + t + '</option>').join('') + '</select></div>';
   abrirModal(f0 ? 'Editar tarea fija' : 'Nueva tarea fija',
-    '<div class="frow c3">' + inp('fx-lista', 'Lista *', c.lista, ' list="dl-fx-lista" placeholder="Cierre mensual, Supervisión, Proveedores…"')
+    '<div class="frow c3">' + inp('fx-lista', 'Lista *', c.lista, ' list="dl-fx-lista" placeholder="Cierre mensual, Impuestos, Proveedores…"')
     + '<datalist id="dl-fx-lista">' + [...new Set(TAR.fijas.map(f => f.lista))].map(l => '<option value="' + esc(l) + '">').join('') + '</datalist>'
     + inp('fx-tit', 'Tarea *', c.titulo) + inp('fx-desc', 'Detalle / rubro', c.descripcion) + '</div>'
     + '<div class="frow c3"><div class="field"><label>Responsable *</label><select id="fx-resp"><option value="">Elegí…</option>' + tarOpcUsuarios(c.responsable) + '</select></div>'
