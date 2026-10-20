@@ -389,7 +389,7 @@ const tarNom = id => { const u = TAR.usuarios.find(x => x.id === id); return u ?
 // etapas: el vencimiento de pago si tiene (impositivos; columnas reg_*: sql/2026-10_tareas_registro.sql) y la tarea
 // (cumplida = registrada / conciliada)
 const tarEtapas = t => (t.reg_estado ? [{ etapa: 'Vto de pago', estado: t.reg_estado, vencimiento: t.reg_vencimiento, completada_en: t.reg_completada_en, quien: t.reg_responsable || t.asignado_a }] : [])
-  .concat([{ etapa: 'Tarea', estado: t.estado, vencimiento: t.vencimiento, completada_en: t.completada_en, quien: t.asignado_a }]);
+  .concat([{ etapa: 'Tarea', estado: t.estado, vencimiento: t.vencimiento, completada_en: t.completada_en, fecha: t.fecha_cumplido, quien: t.asignado_a }]);
 const tarEsImp = t => /^impuesto/i.test(t.lista || '');
 const tarEsPago = (t, campo) => campo === 'reg_estado' || t.lista === 'Proveedores';   // etapa donde "cumplido" = pagado
 const tarEstNom = (t, campo, k) => k === 'hecha' ? (tarEsPago(t, campo) ? 'Pagado' : tarEsImp(t) ? 'Registrado' : 'Cumplido') : TAR_EST[k];
@@ -397,14 +397,17 @@ const tarEstOpts = (t, campo, v) => Object.keys(TAR_EST).map(k => '<option value
 // Cambia el estado de una etapa; al marcar "Pagado" pide la fecha de pago (propone la de hoy). desdeDetalle: vuelve a abrir la tarea.
 async function tarCambiarEstado(id, campo, valor, desdeDetalle){
   const t = TAR.lista.find(x => x.id === id); if (!t) return;
-  const pago = tarEsPago(t, campo);
+  const pago = tarEsPago(t, campo), cumplido = campo === 'estado' && !tarPasos(t) && !pago && (t.estado !== 'hecha' || valor !== 'hecha');
   const guardar = async fecha => {
     const upd = { [campo]: valor }; if (pago) upd.fecha_pago = valor === 'hecha' ? fecha : null;
+    if (cumplido) upd.fecha_cumplido = valor === 'hecha' ? fecha : null;
     const { data, error } = await sb.from(TAR_T).update(upd).eq('id', id).select();
     if (error || !data || !data.length) toast('No se guardó: ' + ((error && error.message) || 'sin permiso'));
-    else { TAR.lista[TAR.lista.indexOf(t)] = data[0]; toast(tarEstNom(data[0], campo, valor) + (pago && valor === 'hecha' ? ' · ' + fmtCorta(fecha) : '')); }
+    else { TAR.lista[TAR.lista.indexOf(t)] = data[0]; if (cumplido && valor === 'hecha') await tarAvisoFecha(t, 'Cumplido', fecha);
+      toast(tarEstNom(data[0], campo, valor) + ((pago || cumplido) && valor === 'hecha' ? ' · ' + fmtCorta(fecha) + (fecha !== hoyISO() ? ' · ⚠ no es la fecha de hoy' : '') : '')); }
     if (desdeDetalle) { tarRender(); tarDetalle(id); } else { cerrarModal(); tarRender(); }
   };
+  if (cumplido && valor === 'hecha') return tarPedirCumplido(t, f => guardar(f), () => { if (desdeDetalle) tarDetalle(id); else { cerrarModal(); tarRender(); } });
   if (!(pago && valor === 'hecha')) return guardar();
   abrirModal('Fecha de pago · ' + t.titulo, '<div class="frow"><div class="field"><label>¿Qué día se pagó?</label><input type="date" id="fp-f" value="' + (t.fecha_pago || hoyISO()) + '"></div></div><div class="err" id="fp-err"></div>',
     '<button class="btn ghost" id="fp-no">Cancelar</button><button class="btn" id="fp-ok">Guardar</button>');
@@ -480,6 +483,33 @@ function tarPasos(t){
 const PASO_AVISO = '⚠ Fecha distinta a la del día';
 // ¿hay un aviso automático de fecha cambiada para este paso?
 const tarPasoAviso = (t, nombre) => TAR.com.some(c => c.tarea_id === t.id && String(c.texto || '').startsWith(PASO_AVISO + ' · ' + nombre + ':'));
+// Deja el comentario de auditoría cuando una fecha cargada no es la del día
+async function tarAvisoFecha(t, nombre, fecha){
+  if (!fecha || fecha === hoyISO()) return;
+  const texto = PASO_AVISO + ' · ' + nombre + ': ' + fmtCorta(fecha) + ' (cargado el ' + fmtCorta(hoyISO()) + ' por ' + tarNom(SP.uid) + ').';
+  const r = await sb.from(TAR_COM_T).insert({ tarea_id: t.id, texto, autor: SP.uid }).select();
+  if (!r.error && r.data) TAR.com.push(r.data[0]);
+}
+// Cierre de mes y tareas varias: "Cumplido" con fecha (propone la del día; otra fecha → aviso + comentario)
+function tarPedirCumplido(t, alGuardar, alCancelar){
+  const hoy = hoyISO(), v0 = t.fecha_cumplido || (t.estado === 'hecha' && t.completada_en ? hoyLocal(t.completada_en) : hoy);
+  abrirModal('Cumplido · ' + t.titulo, '<div class="frow"><div class="field"><label>¿Qué día se cumplió?</label><input type="date" id="fc-f" value="' + v0 + '" max="' + hoy + '"></div></div>'
+    + '<div class="muted" style="font-size:12px">Te propone la fecha de hoy. Si se cumplió otro día, cambiala: queda registrado que se cargó a mano.</div>'
+    + '<div class="warn" id="fc-av" style="font-size:12.5px;margin-top:8px"></div><div class="err" id="fc-err"></div>',
+    '<button class="btn ghost" id="fc-no">Cancelar</button><button class="btn" id="fc-ok">Guardar</button>');
+  const $ = i => document.getElementById(i), av = () => { const f = $('fc-f').value; $('fc-av').textContent = f && f !== hoy ? '⚠ No es la fecha de hoy (' + fmtCorta(hoy) + '): queda un aviso en los comentarios de la tarea.' : ''; };
+  $('fc-f').addEventListener('input', av); av();
+  $('fc-no').addEventListener('click', alCancelar);
+  $('fc-ok').addEventListener('click', () => { const f = $('fc-f').value; if (!/^20\d\d-\d\d-\d\d$/.test(f)) { $('fc-err').textContent = 'Elegí la fecha.'; return; } if (f > hoy) { $('fc-err').textContent = 'No puede ser una fecha futura.'; return; } $('fc-ok').disabled = true; alGuardar(f); });
+}
+async function tarGuardarCumplido(t, fecha){
+  try {
+    const { data, error } = await sb.from(TAR_T).update({ fecha_cumplido: fecha }).eq('id', t.id).select();
+    if (error) throw error; if (!data || !data.length) throw new Error('sin permiso');
+    TAR.lista[TAR.lista.indexOf(t)] = data[0]; await tarAvisoFecha(t, 'Cumplido', fecha);
+    toast('Cumplido el ' + fmtCorta(fecha) + (fecha !== hoyISO() ? ' · ⚠ no es la fecha de hoy' : ''));
+  } catch (e) { toast('No se guardó: ' + (e.message || e) + (/fecha_cumplido/.test(String(e.message)) ? ' (falta correr sql/2026-10_tareas_fecha_cumplido.sql)' : '')); }
+}
 // Guarda la fecha de un paso y recalcula la tarea: cumplida con todos los pasos; con alguno, en gestión.
 // La etapa de pago (reg_estado, si la tarea la tiene) sigue a la fecha de pago.
 async function tarGuardarPaso(t, campo, fecha){
@@ -492,11 +522,7 @@ async function tarGuardarPaso(t, campo, fecha){
     const { data, error } = await sb.from(TAR_T).update(upd).eq('id', t.id).select();
     if (error) throw error; if (!data || !data.length) throw new Error('sin permiso');
     TAR.lista[TAR.lista.indexOf(t)] = data[0];
-    if (fecha && fecha !== hoyISO()) {   // queda a la vista que la fecha no es la del día en que se marcó
-      const texto = PASO_AVISO + ' · ' + paso[2] + ': ' + fmtCorta(fecha) + ' (cargado el ' + fmtCorta(hoyISO()) + ' por ' + tarNom(SP.uid) + ').';
-      const r = await sb.from(TAR_COM_T).insert({ tarea_id: t.id, texto, autor: SP.uid }).select();
-      if (!r.error && r.data) TAR.com.push(r.data[0]);
-    }
+    await tarAvisoFecha(t, paso[2], fecha);   // queda a la vista que la fecha no es la del día en que se marcó
     toast(paso[2] + (fecha ? ' el ' + fmtCorta(fecha) + (fecha !== hoyISO() ? ' · ⚠ no es la fecha de hoy' : '') : ': fecha borrada') + (upd.estado === 'hecha' ? ' · completa' : ''));
     return true;
   } catch (e) {
@@ -504,6 +530,8 @@ async function tarGuardarPaso(t, campo, fecha){
     return false;
   }
 }
+// etiqueta corta para tablas cuando se cumplió fuera de término
+const tarTardeTag = t => tarAv(t) === 'tarde' ? ' <span class="badge b-ambar" style="padding:1px 6px" title="Cumplida el ' + fmtCorta(tarFechaCumplida(t)) + ', vencía el ' + fmtCorta(t.vencimiento) + '">tarde</span>' : '';
 // Resumen corto para tablas: "Presentado 05/10 · Pagado — · Registrado —"
 const tarPasosMini = t => (tarPasos(t) || []).map(([, c, nom]) => '<span style="white-space:nowrap;font-size:11.5px">' + (t[c] ? '✓ ' : '<span class="muted">○ ') + nom + (t[c] ? ' <span class="muted">' + fmtCorta(t[c]) + '</span>' : '</span>') + '</span>').join(' · ');
 function tarRenderLista(tabs){
@@ -527,7 +555,8 @@ function tarRenderLista(tabs){
     { id:'fecha', t:'Fecha', fecha:t => t.fecha, td:t => fmtCorta(t.fecha) },
     { id:'mes', t:'Mes', v:t => t.periodo ? tarMesNom(t.periodo) : '—', td:t => t.periodo ? esc(tarMesNom(t.periodo)) : '<span class="muted">—</span>' },
     { id:'vence', t:'Vence', fecha:t => t.vencimiento, td:t => t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtCorta(t.vencimiento) + '</b> · vencida</span>' : fmtCorta(t.vencimiento)) : '<span class="muted">—</span>' },
-    { id:'est', t:'Estado', v:t => tarEstNom(t, 'estado', t.estado), td:t => '<span class="badge ' + (tarVencida(t) ? 'b-rojo' : TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(tarEstNom(t, 'estado', t.estado)) + '</span>' },
+    { id:'est', t:'Estado', v:t => tarEstNom(t, 'estado', t.estado) + (tarAv(t) === 'tarde' ? ' (tarde)' : ''),
+      td:t => '<span class="badge ' + (tarVencida(t) ? 'b-rojo' : TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(tarEstNom(t, 'estado', t.estado)) + '</span>' + tarTardeTag(t) },
     { id:'adj', t:'Adjuntos', s:t => nAdj(t.id), cls:'num', td:t => nAdj(t.id) ? '📎 ' + nAdj(t.id) : '<span class="muted">—</span>' },
     { id:'com', t:'Comentarios', s:t => nCom(t.id), cls:'num', td:t => nCom(t.id) ? '💬 ' + nCom(t.id) : '<span class="muted">—</span>' },
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
@@ -602,7 +631,7 @@ const TAR_AV = [
   ['tiempo', 'Cumplida a tiempo', '#3f7f45'], ['tarde', 'Cumplida fuera de término', '#7fb070'],
   ['curso', 'En gestión', '#4a78b5'], ['pend', 'Pendiente', '#c99a3a'], ['venc', 'Vencida', '#c0504a']];
 function tarAvEt(e){
-  if (e.estado === 'hecha') { const d = e.completada_en ? hoyLocal(e.completada_en) : ''; return !e.vencimiento || !d || d <= String(e.vencimiento) ? 'tiempo' : 'tarde'; }
+  if (e.estado === 'hecha') { const d = e.fecha ? String(e.fecha).slice(0, 10) : e.completada_en ? hoyLocal(e.completada_en) : ''; return !e.vencimiento || !d || d <= String(e.vencimiento) ? 'tiempo' : 'tarde'; }
   if (e.vencimiento && String(e.vencimiento) < hoyISO()) return 'venc';
   return e.estado === 'en_curso' ? 'curso' : 'pend';
 }
@@ -612,7 +641,7 @@ function tarFechaCumplida(t){
   if (!tarHecha(t)) return '';
   const pasos = tarPasos(t), fs = pasos ? pasos.map(p => t[p[1]]).filter(Boolean).sort() : [];
   if (fs.length) return String(fs[fs.length - 1]).slice(0, 10);
-  return [t.completada_en, t.reg_completada_en].filter(Boolean).map(hoyLocal).sort().pop() || '';
+  return [t.fecha_cumplido ? String(t.fecha_cumplido).slice(0, 10) : t.completada_en && hoyLocal(t.completada_en), t.reg_completada_en && hoyLocal(t.reg_completada_en)].filter(Boolean).sort().pop() || '';
 }
 // avance de la tarea: cumplida cuando todas sus etapas lo están (a tiempo si todas a tiempo)
 function tarAv(t){
@@ -696,8 +725,9 @@ function tarRenderMes(tabs){
     { id:'lista', t:'Lista', v:t => t.lista || 'Sin lista', td:t => '<span class="muted" style="font-size:11.5px">' + esc(t.lista || '—') + '</span>' },
     { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? ' <span class="muted">· ' + esc(t.descripcion) + '</span>' : '') },
     { id:'a', t:'Responsable', v:t => tarNom(t.asignado_a), td:t => esc(tarNom(t.asignado_a)) },
-    { id:'e1', t:'Estado', v:t => TAR_EST[t.estado], td:t => tarPasos(t) ? tarPasosMini(t) : selEst(t, 'estado') },
-    { id:'est', t:'Avance', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)); return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '">' + a[1] + '</span>'; } },
+    { id:'e1', t:'Estado', v:t => TAR_EST[t.estado], td:t => tarPasos(t) ? tarPasosMini(t) : selEst(t, 'estado') },   // a tiempo / tarde: columna Avance
+    { id:'est', t:'Avance', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)), corto = { tiempo:'A tiempo', tarde:'Tarde' }[a[0]] || a[1];
+        return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '" title="' + a[1] + (tarHecha(t) ? ' · cumplida el ' + fmtCorta(tarFechaCumplida(t)) : '') + '">' + corto + '</span>'; } },
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
   ];
   // la columna del vto de pago (segunda etapa) solo si alguna tarea del mes lo tiene
@@ -1054,12 +1084,12 @@ function tarFijaForm(id){
 /* ---------- Historial y eliminadas (sql/2026-10_tareas_historial.sql): solo supervisión ----------
    La base registra cada modificación o eliminación de tareas y de tareas fijas; las eliminadas se pueden restaurar. */
 const TAR_HCAMPOS = { titulo:'Título', descripcion:'Descripción', lista:'Lista', asignado_a:'Asignada a', responsable:'Responsable', asignado_por:'Asignada por',
-  fecha:'Fecha', vencimiento:'Vence', estado:'Estado', periodo:'Mes', dia_vence:'Vence el día', veces:'Veces / mes', orden:'Orden', activa:'Activa', fecha_pago:'Fecha de pago', fecha_registro:'Fecha de registro', fecha_presentacion:'Fecha de presentación', req_presentacion:'Requiere presentación', req_pago:'Requiere pago', req_registro:'Requiere registro', reg_estado:'Estado del pago', reg_vencimiento:'Vto de pago', reg_responsable:'Quién paga', dia_registro:'Vto de pago: día', responsable_registro:'Quién paga' };
+  fecha:'Fecha', vencimiento:'Vence', estado:'Estado', periodo:'Mes', dia_vence:'Vence el día', veces:'Veces / mes', orden:'Orden', activa:'Activa', fecha_pago:'Fecha de pago', fecha_registro:'Fecha de registro', fecha_cumplido:'Cumplido el', fecha_presentacion:'Fecha de presentación', req_presentacion:'Requiere presentación', req_pago:'Requiere pago', req_registro:'Requiere registro', reg_estado:'Estado del pago', reg_vencimiento:'Vto de pago', reg_responsable:'Quién paga', dia_registro:'Vto de pago: día', responsable_registro:'Quién paga' };
 function tarHVal(k, v){
   if (v == null || v === '') return '—';
   if (['asignado_a','responsable','asignado_por','reg_responsable','responsable_registro'].includes(k)) return tarNom(v);
   if (k === 'estado' || k === 'reg_estado') return TAR_EST[v] || v;
-  if (k === 'fecha' || k === 'vencimiento' || k === 'reg_vencimiento' || k === 'fecha_pago' || k === 'fecha_registro' || k === 'fecha_presentacion') return fmtCorta(v);
+  if (k === 'fecha' || k === 'vencimiento' || k === 'reg_vencimiento' || k === 'fecha_pago' || k === 'fecha_registro' || k === 'fecha_presentacion' || k === 'fecha_cumplido') return fmtCorta(v);
   if (k === 'periodo') return tarMesNom(v);
   if (k === 'activa') return v ? 'Sí' : 'No';
   return String(v);
@@ -1207,7 +1237,13 @@ function tarDetalle(id){
     + (pasos ? tarPasosHtml(t, cambiaEstado) : (''
     + '<div class="frow" style="margin-top:10px"><div class="field"><label>Estado</label>' + (cambiaEstado
         ? '<select id="td-est" style="max-width:220px">' + tarEstOpts(t, 'estado', t.estado) + '</select>'
-        : '<span class="badge ' + (TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(tarEstNom(t, 'estado', t.estado)) + '</span>') + (t.completada_en ? ' <span class="muted" style="font-size:12px">hecha el ' + cuandoT(t.completada_en) + '</span>' : '') + '</div></div>'
+        : '<span class="badge ' + (TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(tarEstNom(t, 'estado', t.estado)) + '</span>') + '</div>'
+      + (t.estado === 'hecha' ? '<div class="field"><label>Cumplido el</label>' + (cambiaEstado
+          ? '<input type="date" id="td-fcump" max="' + hoyISO() + '" value="' + esc(t.fecha_cumplido || (t.completada_en ? hoyLocal(t.completada_en) : '')) + '" style="max-width:200px">'
+          : '<b>' + fmtCorta(t.fecha_cumplido || hoyLocal(t.completada_en)) + '</b>')
+        + (tarPasoAviso(t, 'Cumplido') ? ' <span class="warn" style="font-size:11.5px">⚠ fecha cargada a mano</span>' : '')
+        + (tarAv(t) === 'tarde' ? ' <span class="badge b-ambar">fuera de término</span>' : '')
+        + (t.completada_en ? '<div class="muted" style="font-size:11px">marcada en el sistema el ' + cuandoT(t.completada_en) + '</div>' : '') + '</div>' : '') + '</div>'
     + (t.reg_estado ? '<div class="frow c3" style="margin-top:4px"><div><div class="muted" style="font-size:11px">VTO DE PAGO · QUIÉN PAGA</div><b>' + esc(tarNom(t.reg_responsable || t.asignado_a)) + '</b></div>'
         + '<div><div class="muted" style="font-size:11px">VTO DE PAGO</div>' + (t.reg_vencimiento ? fmtCorta(t.reg_vencimiento) : '—') + '</div>'
         + '<div class="field"><label>Estado del pago</label>' + (cambiaEstado
@@ -1248,6 +1284,11 @@ function tarDetalle(id){
     if (v !== hoyISO() && !confirm('La fecha ' + fmtCorta(v) + ' no es la de hoy (' + fmtCorta(hoyISO()) + '). Se va a guardar igual y queda un aviso en los comentarios de la tarea. ¿Seguir?')) { inp.value = tt[campo] || ''; return; }
     await tarGuardarPaso(tt, campo, v); tarRender(); tarDetalle(id); }));
   if ($('td-est')) $('td-est').addEventListener('change', e => tarCambiarEstado(id, 'estado', e.target.value, true));
+  if ($('td-fcump')) $('td-fcump').addEventListener('change', async e => {
+    const v = e.target.value, tt = TAR.lista.find(x => x.id === id);
+    if (!/^20\d\d-\d\d-\d\d$/.test(v) || v > hoyISO()) { e.target.value = tt.fecha_cumplido || hoyLocal(tt.completada_en); return; }
+    if (v !== hoyISO() && !confirm('La fecha ' + fmtCorta(v) + ' no es la de hoy (' + fmtCorta(hoyISO()) + '). Se guarda igual y queda un aviso en los comentarios. ¿Seguir?')) { e.target.value = tt.fecha_cumplido || hoyLocal(tt.completada_en); return; }
+    await tarGuardarCumplido(tt, v); tarRender(); tarDetalle(id); });
   if ($('td-fpago')) $('td-fpago').addEventListener('change', async e => {
     if (!/^20\d\d-\d\d-\d\d$/.test(e.target.value)) return;
     try { const { data, error } = await sb.from(TAR_T).update({ fecha_pago: e.target.value }).eq('id', id).select(); if (error) throw error; if (!data || !data.length) throw new Error('sin permiso.');
