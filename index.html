@@ -624,8 +624,21 @@ function tarVence(periodo, dia, tipo, mes){
   while (!habil(v)) v.setDate(v.getDate() + 1);
   return tarIso(v);
 }
-// mes de cierre de ejemplo para mostrar vencimientos en la plantilla: el abierto o el mes pasado
-const tarPerEj = () => { if (tarMesAbierto()) return tarMesAbierto(); const d = new Date(); d.setMonth(d.getMonth() - 1); return tarIso(d).slice(0, 7); };
+const tarSigMes = p => { const [a, m] = p.split('-').map(Number); return (m === 12 ? a + 1 : a) + '-' + String(m === 12 ? 1 : m + 1).padStart(2, '0'); };
+// mes de cierre de ejemplo para mostrar vencimientos en la plantilla: el abierto; si no hay, el próximo a generar
+const tarPerEj = () => { if (tarMesAbierto()) return tarMesAbierto(); if (TAR.meses && TAR.meses.length) return tarSigMes(TAR.meses[TAR.meses.length - 1].periodo);
+  const d = new Date(); d.setMonth(d.getMonth() - 1); return tarIso(d).slice(0, 7); };
+// fecha + n días hábiles (= public.adminfin_mas_habiles): el registro contable de impuestos vence vto + 2 hábiles
+function tarMasHabiles(iso, n){
+  if (!iso) return null; const fer = new Set((TAR.feriados || []).map(f => String(f.fecha).slice(0, 10)));
+  const [a, m, d] = iso.split('-').map(Number), v = new Date(a, m - 1, d); let k = 0;
+  while (k < n) { v.setDate(v.getDate() + 1); if (v.getDay() !== 0 && v.getDay() !== 6 && !fer.has(tarIso(v))) k++; }
+  return tarIso(v);
+}
+// qué es el vencimiento de cada lista (texto para la plantilla y el Excel)
+const tarVtoTxt = l => /^impuesto/i.test(l || '') ? 'Vto del impuesto (presentación y pago)' : /^proveedor/i.test(l || '') ? 'Vto de pago de la factura' : 'Vto para cumplir la tarea';
+// columnas del vencimiento según la lista: en Impuestos el vto es el "de pago" (dia_registro…) y la tarea (registro) vence 2 hábiles después
+const tarVtoCampos = f => /^impuesto/i.test(f.lista || '') ? ['dia_registro', 'tipo_registro', 'mes_registro'] : ['dia_vence', 'tipo_vence', 'mes_vence'];
 // estado para avance: a tiempo / fuera de término / en curso / pendiente / vencida
 const TAR_AV = [
   ['tiempo', 'Cumplida a tiempo', '#3f7f45'], ['tarde', 'Cumplida fuera de término', '#7fb070'],
@@ -693,6 +706,9 @@ function tarRenderMes(tabs){
   const nH = xs.filter(tarHecha).length, nV = xs.filter(tarVencida).length, nT = xs.filter(t => tarAv(t) === 'tiempo').length;
   const pend = xsMes.length - xsMes.filter(tarHecha).length, pct = v => xs.length ? Math.round(v / xs.length * 100) + '%' : '—';
   if (SP.editar) ta.innerHTML = '<button class="btn ghost" id="tr-puntual">' + ICO.plus + 'Nueva tarea puntual</button>';
+  // sin mes abierto: el siguiente se genera a mano, después de revisar la plantilla (exportar / importar Excel)
+  const sigGen = !abierto && TAR.meses.length ? tarSigMes(TAR.meses[TAR.meses.length - 1].periodo) : '';
+  if (TAR.sup && sigGen) ta.innerHTML += '<button class="btn ghost" id="tm-plant">Revisar plantilla</button><button class="btn" id="tm-generar">Generar tareas de ' + esc(tarMesNom(sigGen)) + '</button>';
   if (TAR.sup && !cerrado && TAR.per === abierto)
     ta.innerHTML += '<button class="btn ghost" id="tm-agregar">' + ICO.plus + 'Agregar tarea al mes</button><button class="btn" id="tm-cerrar"' + (pend ? ' title="Quedan ' + pend + ' tarea(s) sin cumplir: se registran como sin cumplir al cierre"' : '') + '>Cerrar ' + esc(tarMesNom(TAR.per)) + '</button>';
   const kpi = (l, v, sub, warn) => '<div class="kpi"><div class="kpi-label">' + l + '</div><div class="kpi-value' + (warn ? ' warn' : '') + '">' + v + '</div><div class="kpi-sub">' + sub + '</div></div>';
@@ -734,7 +750,10 @@ function tarRenderMes(tabs){
   if (!xs.some(t => t.reg_estado)) cols.splice(cols.findIndex(c => c.id === 'reg'), 1);
   TABLAS.tarm = { cols, base: () => filas };
   const f = tablaFiltrar('tarm', cols, filas, t => [t.lista, t.titulo, t.descripcion, tarNom(t.asignado_a)].join(' '));
-  $main.innerHTML = tabs + avisoFaltan
+  const avisoGen = sigGen ? '<div class="box" style="margin-bottom:14px;border-color:#b8cdac;background:#f1f6ec">✅ <b>' + esc(tarCierreNom(TAR.meses[TAR.meses.length - 1].periodo)) + '</b> cerrado. '
+    + (TAR.sup ? 'Antes de generar las tareas de <b>' + esc(tarMesNom(sigGen)) + '</b> podés revisar la plantilla: en <a href="#" data-tr-irfijas>Tareas fijas</a> exportala a Excel, ajustá vencimientos y responsables (ej. proveedores que facturan un mes y se pagan el siguiente) y volvé a importarla. Cuando esté lista, tocá «Generar tareas de ' + esc(tarMesNom(sigGen)) + '».'
+      : 'Supervisión todavía no generó las tareas de ' + esc(tarMesNom(sigGen)) + '.') + '</div>' : '';
+  $main.innerHTML = tabs + avisoGen + avisoFaltan
     + '<div class="tools" style="padding:0 0 12px"><span style="font-size:12px;color:var(--muted)">Mes</span><select class="tc-in" style="width:auto;text-align:left" id="tm-sel">'
     + TAR.meses.slice().reverse().map(m => '<option value="' + m.periodo + '"' + (m.periodo === TAR.per ? ' selected' : '') + '>' + tarCierreNom(m.periodo) + (m.cerrado_en ? ' · cerrado' : ' · abierto') + '</option>').join('') + '</select>'
     + (cerrado ? '<span class="badge b-verde">Cerrado el ' + fmtCorta(hoyLocal(cerrado)) + '</span>' : pend ? '<span class="muted" style="font-size:12.5px">Sin cumplir: <b>' + pend + '</b>. Si se cierra así, quedan en el índice como «sin cumplir al cierre».</span>' : '<span class="badge b-verde">Todo cumplido: se puede cerrar</span>')
@@ -761,6 +780,14 @@ function tarMesEventos(){
   if ($('tm-ver')) $('tm-ver').addEventListener('change', e => { TAR.mesVer = e.target.value; tarRender(); });
   if ($('tm-agregar')) $('tm-agregar').addEventListener('click', () => tarForm(null, TAR.per));
   if ($('tr-puntual')) $('tr-puntual').addEventListener('click', () => tarForm(null));
+  if ($('tm-plant')) $('tm-plant').addEventListener('click', () => { TAR.modo = 'fijas'; tarRender(); });
+  if ($('tm-generar')) $('tm-generar').addEventListener('click', async () => {
+    const per = tarSigMes(TAR.meses[TAR.meses.length - 1].periodo);
+    if (!confirm('¿Generar las tareas de ' + tarMesNom(per) + ' con la plantilla actual? Después los cambios en la plantilla valen recién para el mes siguiente.')) return;
+    $('tm-generar').disabled = true;
+    const { data, error } = await sb.rpc('adminfin_tareas_abrir_mes', { p_periodo: per });
+    if (error) { toast('No se pudo: ' + error.message); $('tm-generar').disabled = false; return; }
+    toast(tarMesNom(per) + ' abierto · ' + data + ' tareas generadas'); TAR.per = per; TAR.cargado = false; await tarCargar(); });
   $main.querySelectorAll('[data-tr-irimp]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); TAR.modo = 'lista'; TAR.cat = 'imp'; tarRender(); }));
   $main.querySelectorAll('[data-tr-ver]').forEach(b => b.addEventListener('click', () => tarDetalle(+b.dataset.trVer)));
   $main.querySelectorAll('[data-tm-fed]').forEach(sp => sp.addEventListener('click', () => {
@@ -790,11 +817,11 @@ function tarMesEventos(){
   if ($('tm-cerrar')) $('tm-cerrar').addEventListener('click', async () => {
     const per = TAR.per, [a, m] = per.split('-').map(Number), sig = (m === 12 ? a + 1 : a) + '-' + String(m === 12 ? 1 : m + 1).padStart(2, '0');
     const pendC = TAR.lista.filter(t => t.periodo === per && !tarHecha(t)).length;
-    if (!confirm('¿Cerrar ' + tarMesNom(per) + '? Se guarda el índice del mes' + (pendC ? ' con ' + pendC + ' tarea(s) SIN CUMPLIR al cierre (siguen en el mes y se pueden cumplir después, fuera de término)' : '') + ' y se generan las tareas de ' + tarMesNom(sig) + '.')) return;
+    if (!confirm('¿Cerrar ' + tarMesNom(per) + '? Se guarda el índice del mes' + (pendC ? ' con ' + pendC + ' tarea(s) SIN CUMPLIR al cierre (siguen en el mes y se pueden cumplir después, fuera de término)' : '') + '. Las tareas de ' + tarMesNom(sig) + ' las generás después, cuando la plantilla esté lista.')) return;
     $('tm-cerrar').disabled = true;
     const { data, error } = await sb.rpc('adminfin_tareas_cerrar_mes', { p_periodo: per });
     if (error) { toast('No se pudo cerrar: ' + error.message); $('tm-cerrar').disabled = false; return; }
-    toast(tarMesNom(per) + ' cerrado (índice guardado) · ' + tarMesNom(sig) + ': ' + data + ' tareas generadas'); TAR.per = sig; TAR.cargado = false; await tarCargar(); });
+    toast(tarMesNom(per) + ' cerrado (índice guardado). Revisá la plantilla y generá ' + tarMesNom(sig) + ' cuando esté lista.'); TAR.cargado = false; await tarCargar(); });
 }
 /* ---------- Impuestos: las tareas del mes de la lista "Impuestos" (Pago y Registro AGIP, ARBA, Sicore, SUSS, CM, IVA) ----------
    Mismos datos que Tareas (adminfin_tareas). Todos tienen F. de vencimiento (reg_vencimiento: el vto impositivo, para
@@ -893,16 +920,128 @@ function tarRenderIndice(tabs){
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(datos), 'Índice'); XLSX.writeFile(wb, 'Indice_tareas_' + hoyISO() + '.xlsx');
   });
 }
+/* ---------- Plantilla en Excel: exportar, ajustar (día, tipo, mes, responsable, activa…) e importar ----------
+   El ID une cada fila con su tarea fija. Al importar se muestra qué cambia antes de aplicar; filas sin ID = tareas nuevas.
+   Las tareas que no estén en el archivo no se tocan (para dejar de generar una, Activa = No). Solo supervisión. */
+const TFX_COLS = ['ID', 'Lista', 'Tarea', 'Detalle', 'Responsable (mail)', 'Vence: tipo (Día / Hábil)', 'Vence: día o n° de día hábil', 'Vence: mes (Siguiente / Mismo)', 'Activa (Sí / No)', 'Veces por mes', 'Orden'];
+const tfxMail = id => { const u = TAR.usuarios.find(x => x.id === id); return u ? u.email : ''; };
+function tarFijasExportar(){
+  if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+  const pej = tarPerEj(), vtoCol = 'Vence en el ' + tarCierreNom(pej).toLowerCase() + ' (referencia)';
+  const filas = TAR.fijas.slice().sort((a, b) => a.orden - b.orden || a.id - b.id).map(f => {
+    const [cDia, cTipo, cMes] = tarVtoCampos(f), vto = tarVence(pej, f[cDia], f[cTipo], f[cMes]);
+    return { 'ID': f.id, 'Lista': f.lista, 'Tarea': f.titulo, 'Detalle': f.descripcion || '', 'Responsable (mail)': tfxMail(f.responsable),
+      'Vence: tipo (Día / Hábil)': f[cTipo] === 'habil' ? 'Hábil' : 'Día', 'Vence: día o n° de día hábil': f[cDia] || '', 'Vence: mes (Siguiente / Mismo)': +f[cMes] === 0 ? 'Mismo' : 'Siguiente',
+      'Activa (Sí / No)': f.activa ? 'Sí' : 'No', 'Veces por mes': f.veces || 1, 'Orden': f.orden,
+      'Qué vence': tarVtoTxt(f.lista), [vtoCol]: vto ? fmtFecha(vto) : '', 'Registro contable (Impuestos, vto + 2 hábiles)': /^impuesto/i.test(f.lista) && vto ? fmtFecha(tarMasHabiles(vto, 2)) : '' };
+  });
+  const ws = XLSX.utils.json_to_sheet(filas, { header: TFX_COLS.concat(['Qué vence', vtoCol, 'Registro contable (Impuestos, vto + 2 hábiles)']) });
+  ws['!cols'] = [6, 16, 38, 26, 30, 14, 12, 14, 10, 8, 8, 34, 22, 26].map(w => ({ wch: w }));
+  const inst = [['Plantilla de tareas fijas · cómo usarla'], [''],
+    ['1. Cambiá lo que necesites en la hoja "Plantilla" y guardá el archivo (.xlsx).'],
+    ['2. En la app: Tareas asignadas → Tareas fijas → "Importar Excel". Antes de aplicar te muestra qué cambia.'],
+    ['3. No cambies la columna ID: es la que une cada fila con su tarea. Para una tarea NUEVA dejá el ID vacío.'],
+    ['4. Las tareas que borres del archivo NO se borran: para dejar de generarla poné Activa = No.'],
+    [''], ['Vencimiento (columnas "Vence: …"):'],
+    ['· Tipo "Día" = ese día del mes (si cae sábado, domingo o feriado, pasa al siguiente hábil). Tipo "Hábil" = el n° de día hábil del mes.'],
+    ['· Mes "Siguiente" = el mes siguiente al cierre (ej. cierre septiembre → vence en octubre). "Mismo" = el mismo mes del cierre.'],
+    ['· Cierre mensual: vto para cumplir la tarea. Proveedores: vto de pago de la factura. Impuestos: vto del impuesto (presentación y pago); el registro contable vence 2 días hábiles después.'],
+    ['· Las columnas de la derecha ("Qué vence", "Vence en …", "Registro contable") son solo de referencia: no se importan.'],
+    [''], ['Responsable: el mail con el que entra a la app. Disponibles: ' + TAR.usuarios.map(u => u.email).join(', ')]];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Plantilla');
+  const wi = XLSX.utils.aoa_to_sheet(inst); wi['!cols'] = [{ wch: 140 }]; XLSX.utils.book_append_sheet(wb, wi, 'Instrucciones');
+  XLSX.writeFile(wb, 'Plantilla_tareas_fijas_' + hoyISO() + '.xlsx');
+}
+function tarFijasImportar(){
+  abrirModal('Importar plantilla desde Excel',
+    '<p style="margin:0 0 12px;font-size:12.5px;color:#5f5c52;line-height:1.5">Elegí el Excel exportado desde acá (hoja "Plantilla"). Antes de aplicar te muestro qué cambia; no se aplica nada hasta que confirmes.</p>'
+    + '<div class="field"><label>Archivo (.xlsx)</label><input type="file" id="tfi-file" accept=".xlsx,.xls"></div><div id="tfi-res"></div><div class="err" id="tfi-err"></div>',
+    '<button class="btn ghost" id="tfi-no">Cerrar</button><button class="btn" id="tfi-ok" disabled>Aplicar cambios</button>', 'wide');
+  const $ = i => document.getElementById(i);
+  let plan = null;
+  $('tfi-no').addEventListener('click', cerrarModal);
+  $('tfi-file').addEventListener('change', async () => {
+    $('tfi-err').textContent = ''; $('tfi-res').innerHTML = ''; $('tfi-ok').disabled = true; plan = null;
+    const f = $('tfi-file').files[0]; if (!f) return;
+    try {
+      const wb = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type: 'array' });
+      const ws = wb.Sheets['Plantilla'] || wb.Sheets[wb.SheetNames[0]];
+      plan = tarFijasPlan(XLSX.utils.sheet_to_json(ws, { defval: '', raw: true }));
+    } catch (e) { $('tfi-err').textContent = 'No pude leer el archivo: ' + (e.message || e); return; }
+    const li = xs => xs.map(x => '<div class="it">' + x + '</div>').join('');
+    $('tfi-res').innerHTML = '<div class="box"><b>' + plan.cambios.length + '</b> tarea(s) con cambios · <b>' + plan.nuevas.length + '</b> nueva(s) · <b>' + plan.igual + '</b> sin cambios'
+      + (plan.errores.length ? ' · <span class="warn"><b>' + plan.errores.length + '</b> fila(s) con error (no se aplican)</span>' : '') + '</div>'
+      + (plan.errores.length ? '<h4 style="margin:10px 0 4px">Errores</h4><div class="hist" style="max-height:140px">' + li(plan.errores.map(esc)) + '</div>' : '')
+      + (plan.cambios.length ? '<h4 style="margin:10px 0 4px">Cambios</h4><div class="hist" style="max-height:260px">' + li(plan.cambios.map(c => '<b>' + esc(c.titulo) + '</b>: ' + c.txt.map(esc).join(' · '))) + '</div>' : '')
+      + (plan.nuevas.length ? '<h4 style="margin:10px 0 4px">Nuevas</h4><div class="hist" style="max-height:140px">' + li(plan.nuevas.map(n => esc(n.fila.lista + ' · ' + n.fila.titulo))) + '</div>' : '');
+    $('tfi-ok').disabled = !(plan.cambios.length || plan.nuevas.length);
+  });
+  $('tfi-ok').addEventListener('click', async () => {
+    if (!plan) return; $('tfi-ok').disabled = true; let ok = 0; const fallas = [];
+    for (const c of plan.cambios) { const { data, error } = await sb.from(TAR_FIJ_T).update(c.upd).eq('id', c.id).select(); if (error || !data || !data.length) fallas.push(c.titulo + ': ' + ((error && error.message) || 'sin permiso')); else ok++; }
+    for (const n of plan.nuevas) { const { data, error } = await sb.from(TAR_FIJ_T).insert(n.fila).select(); if (error || !data || !data.length) fallas.push(n.fila.titulo + ': ' + ((error && error.message) || 'sin permiso')); else ok++; }
+    if (fallas.length) { $('tfi-err').innerHTML = 'No se aplicaron:<br>' + fallas.map(esc).join('<br>'); }
+    else cerrarModal();
+    toast(ok + ' tarea(s) actualizada(s) / agregada(s)' + (fallas.length ? ' · ' + fallas.length + ' con error' : ''));
+    TAR.cargado = false; await tarCargar();
+  });
+}
+// Compara el Excel con la plantilla: { cambios:[{id, titulo, upd, txt}], nuevas:[{fila}], errores:[texto], igual:n }
+function tarFijasPlan(rows){
+  const plan = { cambios: [], nuevas: [], errores: [], igual: 0 }, txt = v => String(v == null ? '' : v).trim();
+  const vistos = new Set();
+  rows.forEach((r, i) => {
+    const n = i + 2, lista = txt(r['Lista']), titulo = txt(r['Tarea']);
+    if (!lista && !titulo && !txt(r['ID'])) return;   // fila vacía
+    const err = m => plan.errores.push('Fila ' + n + (titulo ? ' (' + titulo + ')' : '') + ': ' + m);
+    const id = txt(r['ID']) ? parseInt(txt(r['ID']), 10) : null, f0 = id ? TAR.fijas.find(f => f.id === id) : null;
+    if (id && !f0) return err('el ID ' + id + ' no existe en la plantilla (para una tarea nueva dejá el ID vacío)');
+    if (id && vistos.has(id)) return err('el ID ' + id + ' está repetido'); if (id) vistos.add(id);
+    if (!lista || !titulo) return err('faltan Lista o Tarea');
+    const mail = txt(r['Responsable (mail)']).toLowerCase(), u = TAR.usuarios.find(x => String(x.email || '').toLowerCase() === mail || String(x.nombre || '').toLowerCase() === mail);
+    if (!u) return err(mail ? 'no encuentro al responsable «' + mail + '»' : 'falta el responsable');
+    const tipoT = txt(r['Vence: tipo (Día / Hábil)']).toLowerCase(), tipo = /h[aá]bil/.test(tipoT) ? 'habil' : /d[ií]a/.test(tipoT) || !tipoT ? 'dia' : null;
+    if (!tipo) return err('tipo de vencimiento «' + tipoT + '»: tiene que ser Día o Hábil');
+    const dia = parseInt(txt(r['Vence: día o n° de día hábil']), 10);
+    if (!(dia >= 1 && dia <= 31)) return err('el día de vencimiento tiene que ser de 1 a 31');
+    const mesT = txt(r['Vence: mes (Siguiente / Mismo)']).toLowerCase(), mes = /mism/.test(mesT) ? 0 : /sig/.test(mesT) || !mesT ? 1 : null;
+    if (mes == null) return err('mes «' + mesT + '»: tiene que ser Siguiente o Mismo');
+    const actT = txt(r['Activa (Sí / No)']).toLowerCase(), activa = !actT ? true : /^(s[ií]|x|1|true)$/.test(actT) ? true : /^(no|0|false)$/.test(actT) ? false : null;
+    if (activa == null) return err('Activa «' + actT + '»: tiene que ser Sí o No');
+    const veces = txt(r['Veces por mes']) ? parseInt(txt(r['Veces por mes']), 10) : 1;
+    if (!(veces >= 1 && veces <= 31)) return err('Veces por mes: de 1 a 31');
+    const orden = txt(r['Orden']) !== '' && !isNaN(+txt(r['Orden'])) ? Math.round(+txt(r['Orden'])) : null;
+    const fila = { lista, titulo, descripcion: txt(r['Detalle']) || null, responsable: u.id, activa, veces };
+    if (orden != null) fila.orden = orden;
+    // vencimiento: en Impuestos es el vto del impuesto (campos de pago) y la tarea vence igual (el registro se calcula a +2 hábiles al generar)
+    if (/^impuesto/i.test(lista)) Object.assign(fila, { dia_registro: dia, tipo_registro: tipo, mes_registro: mes, dia_vence: dia, tipo_vence: tipo, mes_vence: mes });
+    else Object.assign(fila, { dia_vence: dia, tipo_vence: tipo, mes_vence: mes });
+    if (!f0) { if (fila.orden == null) fila.orden = Math.max(0, ...TAR.fijas.map(f => f.orden || 0)) + 10 * (plan.nuevas.length + 1); plan.nuevas.push({ fila }); return; }
+    const nom = { lista:'lista', titulo:'nombre', descripcion:'detalle', responsable:'responsable', activa:'activa', veces:'veces', orden:'orden' };
+    const vtoDe = (o, c) => o[c[0]] ? (o[c[1]] === 'habil' ? o[c[0]] + '° hábil' : 'día ' + o[c[0]]) + ' ' + (+o[c[2]] === 0 ? 'mismo mes' : 'mes sig.') : 'sin vto';
+    const upd = {}, cambios = [];
+    Object.keys(fila).forEach(k => { const a = f0[k] == null ? null : f0[k], b = fila[k] == null ? null : fila[k];
+      if (String(a) !== String(b)) { upd[k] = fila[k]; if (nom[k]) cambios.push(nom[k] + ': ' + (k === 'responsable' ? tarNom(a) + ' → ' + tarNom(b) : k === 'activa' ? (a ? 'sí' : 'no') + ' → ' + (b ? 'sí' : 'no') : (a == null ? '—' : a) + ' → ' + (b == null ? '—' : b))); } });
+    const c0 = tarVtoCampos(f0), c1 = tarVtoCampos(fila);
+    if (vtoDe(f0, c0) !== vtoDe(fila, c1)) cambios.push('vencimiento: ' + vtoDe(f0, c0) + ' → ' + vtoDe(fila, c1));
+    if (Object.keys(upd).length) plan.cambios.push({ id: f0.id, titulo: f0.titulo, upd, txt: cambios.length ? cambios : ['iguala el plazo interno de la tarea al vto (sin cambios a la vista)'] }); else plan.igual++;
+  });
+  return plan;
+}
 function tarRenderFijas(tabs){
   const ta = document.getElementById('topActions');
   if (TAR.errFij) { $main.innerHTML = tabs + '<div class="card"><div class="empty">No pude leer las tareas fijas: ' + esc(TAR.errFij) + '<br><span class="muted">Falta correr sql/2026-10_tareas_fijas.sql en Supabase.</span></div></div>'; return; }
   const ed = TAR.sup;
   // fija = se repite todos los meses (plantilla); puntual = una sola vez, no se repite
-  ta.innerHTML = (SP.editar ? '<button class="btn ghost" id="tr-puntual">' + ICO.plus + 'Nueva tarea puntual</button>' : '') + (ed ? '<button class="btn" id="tf-nueva">' + ICO.plus + 'Nueva tarea fija</button>' : '');
+  ta.innerHTML = (ed ? '<button class="btn ghost" id="tf-xls">' + ICO.xls + 'Exportar Excel</button><button class="btn ghost" id="tf-imp">' + ICO.upload + 'Importar Excel</button>' : '')
+    + (SP.editar ? '<button class="btn ghost" id="tr-puntual">' + ICO.plus + 'Nueva tarea puntual</button>' : '') + (ed ? '<button class="btn" id="tf-nueva">' + ICO.plus + 'Nueva tarea fija</button>' : '');
+  const bx = document.getElementById('tf-xls'); if (bx) bx.addEventListener('click', tarFijasExportar);
+  const bi = document.getElementById('tf-imp'); if (bi) bi.addEventListener('click', tarFijasImportar);
   const bPunt = document.getElementById('tr-puntual'); if (bPunt) bPunt.addEventListener('click', () => tarForm(null));
   const listas = [...new Set(TAR.fijas.map(f => f.lista))];
   const base = TAR.fijas.filter(f => !TAR.fijLista || f.lista === TAR.fijLista);
-  const faltan = TAR.fijas.filter(f => f.activa && (!f.responsable || !f.dia_vence || (/^impuesto/i.test(f.lista) && !f.dia_registro))).length;
+  const faltan = TAR.fijas.filter(f => f.activa && (!f.responsable || !f[tarVtoCampos(f)[0]])).length;
   const optU = (sel, vacio) => '<option value="">' + (vacio || '— elegí —') + '</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '"' + (u.id === sel ? ' selected' : '') + '>' + esc(u.nombre || u.email) + '</option>').join('');
   const selU = (f, campo, vacio, rojo) => ed ? '<select class="tc-in" style="width:auto;text-align:left' + (rojo ? ';border-color:#c0504a' : '') + '" data-tfx="' + f.id + '|' + campo + '">' + optU(f[campo], vacio) + '</select>' : (f[campo] ? esc(tarNom(f[campo])) : vacio ? '<span class="muted">' + vacio + '</span>' : '<span class="warn">sin asignar</span>');
   const inDia = (f, campo, rojo) => ed ? '<input type="number" min="1" max="31" class="tc-in" style="width:56px' + (rojo ? ';border-color:#c0504a' : '') + '" value="' + (f[campo] || '') + '" data-tfx="' + f.id + '|' + campo + '">' : (f[campo] || (rojo ? '<span class="warn">—</span>' : '—'));
@@ -914,19 +1053,21 @@ function tarRenderFijas(tabs){
     return '<div class="tet">' + selX(f, cTipo, [['dia', 'Día'], ['habil', 'Hábil n°']]) + inDia(f, cDia, oblig && !f[cDia])
       + selX(f, cMes, [[1, 'mes sig.'], [0, 'mismo mes']]) + '<span class="tet-v" title="Vencimiento para el ' + esc(tarCierreNom(pej).toLowerCase()) + '">' + (vto ? '→ ' + fmtCorta(vto) : '') + '</span>'
       + (!oblig && ed && !pagoObl ? '<button class="iconbtn del" title="Quitar el vto de pago de esta tarea" data-tf-noreg="' + f.id + '">✕</button>' : '') + '</div>'; };
+  // Vencimiento: un solo dato por tarea (qué significa depende de la lista); al lado, la fecha que da para el mes de ejemplo
+  const vtoTd = f => { const [cDia, cTipo, cMes] = tarVtoCampos(f), vto = tarVence(pej, f[cDia], f[cTipo], f[cMes]);
+    return '<div class="muted" style="font-size:10.5px;margin-bottom:2px">' + esc(tarVtoTxt(f.lista)) + '</div><div class="tet">'
+      + selX(f, cTipo, [['dia', 'Día'], ['habil', 'Hábil n°']]) + inDia(f, cDia, !f[cDia]) + selX(f, cMes, [[1, 'mes sig.'], [0, 'mismo mes']]) + '</div>'; };
+  const ejTd = f => { const [cDia, cTipo, cMes] = tarVtoCampos(f), vto = tarVence(pej, f[cDia], f[cTipo], f[cMes]);
+    if (!vto) return '<span class="warn">falta</span>';
+    return '<b>' + fmtCorta(vto) + '</b>' + (esImp(f) ? '<div class="muted" style="font-size:11px">registro: ' + fmtCorta(tarMasHabiles(vto, 2)) + '</div>' : ''); };
   const cols = [
-    { id:'lista', t:'Lista', v:f => f.lista, td:f => esc(f.lista) },
-    { id:'tit', t:'Tarea', s:f => f.titulo, cls:'wrap', td:f => '<b>' + esc(f.titulo) + '</b>' + (f.descripcion ? '<div class="muted" style="font-size:11.5px">' + esc(f.descripcion) + '</div>' : '') },
+    { id:'lista', t:'Lista', v:f => f.lista, td:f => '<span class="muted" style="font-size:11.5px">' + esc(f.lista) + '</span>' },
+    { id:'tit', t:'Tarea', s:f => f.titulo, cls:'wrap', td:f => '<b>' + esc(f.titulo) + '</b>' + (f.descripcion ? '<div class="muted" style="font-size:11px">' + esc(f.descripcion) + '</div>' : '') },
     { id:'resp', t:'Responsable', v:f => f.responsable ? tarNom(f.responsable) : '(sin asignar)', td:f => selU(f, 'responsable', '', !f.responsable) },
-    { id:'rdia', t:'Vto de pago / impositivo (presentación y pago)', s:f => f.dia_registro || 99, td:f => venTd(f, 'dia_registro', 'tipo_registro', 'mes_registro', false) },
-    { id:'rresp', t:'Paga', v:f => f.dia_registro ? tarNom(f.responsable_registro || f.responsable) : '—', td:f => f.dia_registro ? selU(f, 'responsable_registro', '(el mismo)') : '<span class="muted">—</span>' },
-    { id:'dia', t:'Vence (' + TAR_MESES[+pej.slice(5) - 1].slice(0, 3) + ' ' + pej.slice(2, 4) + ')', s:f => f.dia_vence || 99,
-      td:f => esImp(f) ? '<span class="muted" style="font-size:11.5px">registro: vto + 2 días hábiles</span>' : venTd(f, 'dia_vence', 'tipo_vence', 'mes_vence', true) },
-    { id:'req', t:'Requiere (Impuestos)', td:f => !esImp(f) ? '<span class="muted">—</span>' : '<span class="tet" style="gap:8px">' + [['req_presentacion', 'Presentación'], ['req_pago', 'Pago'], ['req_registro', 'Registro']]
-        .map(([c, l]) => '<label style="display:inline-flex;gap:3px;align-items:center;font-size:11.5px;white-space:nowrap"><input type="checkbox"' + (f[c] !== false ? ' checked' : '') + (ed ? ' data-tfx="' + f.id + '|' + c + '"' : ' disabled') + '>' + l + '</label>').join('') + '</span>' },
-    { id:'veces', t:'Veces', s:f => f.veces, cls:'num', td:f => f.veces },
-    { id:'ord', t:'Orden', td:f => ed ? '<span class="tet"><button class="iconbtn" title="Subir" data-tf-mov="' + f.id + '|-1">▲</button><button class="iconbtn" title="Bajar" data-tf-mov="' + f.id + '|1">▼</button></span>' : '' },
+    { id:'vto', t:'Vencimiento', s:f => f[tarVtoCampos(f)[0]] || 99, td:vtoTd },
+    { id:'ej', t:'Vence (' + tarCierreNom(pej).replace('Cierre ', 'cierre ') + ')', s:f => { const [d, t, m] = tarVtoCampos(f); return tarVence(pej, f[d], f[t], f[m]) || '9999'; }, td:ejTd },
     { id:'act', t:'Activa', v:f => f.activa ? 'Sí' : 'No', td:f => ed ? '<input type="checkbox"' + (f.activa ? ' checked' : '') + ' data-tfx="' + f.id + '|activa">' : (f.activa ? 'Sí' : 'No') },
+    { id:'ord', t:'Orden', td:f => ed ? '<span class="tet"><button class="iconbtn" title="Subir" data-tf-mov="' + f.id + '|-1">▲</button><button class="iconbtn" title="Bajar" data-tf-mov="' + f.id + '|1">▼</button></span>' : '' },
     { id:'acc', t:'', td:f => ed ? '<button class="btn ghost sm" data-tf-ed="' + f.id + '">Editar</button>' : '' },
   ];
   TABLAS.tarf = { cols, base: () => base };
@@ -934,16 +1075,7 @@ function tarRenderFijas(tabs){
   const chip = (v, l) => '<button class="mtab' + (TAR.fijLista === v ? ' active' : '') + '" data-tf-lista="' + esc(v) + '">' + esc(l) + '</button>';
   $main.innerHTML = tabs
     + (faltan ? '<div class="box" style="margin-bottom:14px;border-color:#e3c48c;background:#fbf4e6">⚠ <b>' + faltan + '</b> tarea(s) activa(s) sin responsable, día de vencimiento o (Impuestos) vto de pago (marcadas en rojo). Sin eso no se puede generar el mes.</div>' : '')
-    + '<div class="card">' + cardH('Tareas fijas mensuales', ed ? 'Los cambios valen para los meses que se abran <b>de acá en adelante</b>. Vence: «Día» = ese día del mes (sábado, domingo o feriado → siguiente hábil); «Hábil n°» = n° día hábil. «mes sig.» = el mes siguiente al cierre. La flecha muestra el ejemplo.' : 'Solo supervisión edita la plantilla.')
-    + (ed ? '<div class="tools" style="padding:10px 14px 0;flex-wrap:wrap;gap:8px"><b style="font-size:12.5px">Completar en bloque</b>'
-      + '<span class="muted" style="font-size:12px">a las ' + base.length + ' tarea(s) de ' + (TAR.fijLista ? '«' + esc(TAR.fijLista) + '»' : 'todas las listas') + ':</span>'
-      + '<select class="tc-in" style="width:auto;text-align:left" id="tfb-resp"><option value="">Responsable (no cambiar)</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '">' + esc(u.nombre || u.email) + '</option>').join('') + '</select>'
-      + '<select class="tc-in" style="width:auto;text-align:left" id="tfb-tipo"><option value="">Tipo (no cambiar)</option><option value="dia">Día</option><option value="habil">Día hábil n°</option></select>'
-      + '<input type="number" min="1" max="31" class="tc-in" style="width:96px" id="tfb-dia" placeholder="Día (1-31)">'
-      + '<input type="number" min="1" max="31" class="tc-in" style="width:120px" id="tfb-rdia" placeholder="Día vto pago">'
-      + '<select class="tc-in" style="width:auto;text-align:left" id="tfb-rresp"><option value="">Quién paga (no cambiar)</option>' + TAR.usuarios.map(u => '<option value="' + esc(u.id) + '">' + esc(u.nombre || u.email) + '</option>').join('') + '</select>'
-      + '<label style="font-size:12.5px"><input type="checkbox" id="tfb-vacias" checked> solo donde está vacío</label>'
-      + '<button class="btn ghost sm" id="tfb-ok">Aplicar</button></div>' : '')
+    + '<div class="card">' + cardH('Tareas fijas mensuales', ed ? 'Los cambios valen para los meses que se abran <b>de acá en adelante</b>. Vence: «Día» = ese día del mes (sábado, domingo o feriado → siguiente hábil); «Hábil n°» = n° día hábil. «mes sig.» = el mes siguiente al cierre. La columna «Vence» muestra la fecha que da para el próximo mes. Para ajustar muchas juntas: Exportar Excel → cambiar → Importar Excel.' : 'Solo supervisión edita la plantilla.')
     + '<div class="chips" style="padding:8px 14px 0">' + chip('', 'Todas (' + TAR.fijas.length + ')') + listas.map(l => chip(l, l + ' (' + TAR.fijas.filter(f => f.lista === l).length + ')')).join('') + '</div>'
     + tablaHerramientas('tarf', 'Buscar tarea, lista, responsable…') + tablaHtml('tarf', cols, fl, '', f => f.activa ? '' : 'muted') + '</div>'
     + '<div class="card" style="margin-top:14px;max-width:640px">' + cardH('Feriados', 'No cuentan como día hábil para los vencimientos. Cargalos con anticipación (los meses ya abiertos no se recalculan).')
