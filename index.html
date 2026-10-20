@@ -1132,7 +1132,8 @@ function tarPasosHtml(t, puede){
             : (puede ? '<button class="btn sm" data-td-paso="' + c + '|hoy">Marcar ' + esc(nom.toLowerCase()) + ' hoy (' + fmtCorta(hoyISO()) + ')</button>'
                      + ' <span class="muted" style="font-size:11.5px">o con otra fecha:</span> <input type="date" class="tc-in" style="width:auto" data-td-pfecha="' + c + '">' : '<span class="muted">pendiente</span>'))
           + '</div>'; }).join('')
-    + '<div class="muted" style="font-size:11.5px;margin-top:4px">' + (tarHecha(t) ? '✓ Completa' : 'Queda cumplida cuando están todos los pasos.') + '</div></div>';
+    // completa = todos los pasos con fecha (no el estado: una tarea marcada con el selector viejo puede no tener las fechas)
+    + '<div class="muted" style="font-size:11.5px;margin-top:4px">' + (pasos.every(p => t[p[1]]) ? '✓ Completa' : 'Queda cumplida cuando están todos los pasos.') + '</div></div>';
 }
 function tarDetalle(id){
   const t = TAR.lista.find(x => x.id === id); if (!t) return;
