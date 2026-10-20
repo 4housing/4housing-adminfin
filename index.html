@@ -466,6 +466,46 @@ function tarRender0(){
 const TAR_CATS = [['cierre', 'Cierre de mes'], ['imp', 'Impuestos'], ['prov', 'Proveedores'], ['varias', 'Tareas varias']];
 const tarCat = t => tarEsImp(t) ? 'imp' : /^cierre/i.test(t.lista || '') ? 'cierre' : /^proveedor/i.test(t.lista || '') ? 'prov' : 'varias';
 const TAR_VER = [['todas', 'Todas'], ['mias', 'Las mías (asignadas a mí, responsable o quien paga)'], ['creadas', 'Creadas por mí'], ['resp', 'Delegadas (soy responsable)']];
+/* ---------- Pasos con fecha: Impuestos (Presentado / Pagado / Registrado, según lo que requiera cada uno) y
+   Proveedores (Registrada / Pagada). Cierre de mes y el resto: estado como siempre.
+   Cada paso se marca con la fecha del día; si se carga otra fecha, se avisa y queda un comentario automático. ---------- */
+const PASO_TXT = { pres: ['Presentado', 'DDJJ presentada / VEP generado'], pago: ['Pagado', ''], reg: ['Registrado', 'registro contable'] };
+const PASO_TXT_PROV = { reg: ['Registrada', 'factura registrada'], pago: ['Pagada', ''] };
+// [clave, columna, nombre, aclaración]
+function tarPasos(t){
+  if (tarEsImp(t)) { const r = impReq(t); return IMP_PASOS.filter(([k]) => r[k]).map(([k, c]) => [k, c, PASO_TXT[k][0], PASO_TXT[k][1]]); }
+  if (tarCat(t) === 'prov') return [['reg', 'fecha_registro', ...PASO_TXT_PROV.reg], ['pago', 'fecha_pago', ...PASO_TXT_PROV.pago]];
+  return null;
+}
+const PASO_AVISO = '⚠ Fecha distinta a la del día';
+// ¿hay un aviso automático de fecha cambiada para este paso?
+const tarPasoAviso = (t, nombre) => TAR.com.some(c => c.tarea_id === t.id && String(c.texto || '').startsWith(PASO_AVISO + ' · ' + nombre + ':'));
+// Guarda la fecha de un paso y recalcula la tarea: cumplida con todos los pasos; con alguno, en gestión.
+// La etapa de pago (reg_estado, si la tarea la tiene) sigue a la fecha de pago.
+async function tarGuardarPaso(t, campo, fecha){
+  const pasos = tarPasos(t) || [], paso = pasos.find(p => p[1] === campo); if (!paso) return false;
+  const n = Object.assign({}, t, { [campo]: fecha || null });
+  const falta = pasos.filter(p => !n[p[1]]), alguna = pasos.some(p => n[p[1]]);
+  const upd = { [campo]: fecha || null, estado: !falta.length ? 'hecha' : alguna ? 'en_curso' : 'pendiente' };
+  if (t.reg_estado) upd.reg_estado = !pasos.some(p => p[0] === 'pago') || n.fecha_pago ? 'hecha' : 'pendiente';
+  try {
+    const { data, error } = await sb.from(TAR_T).update(upd).eq('id', t.id).select();
+    if (error) throw error; if (!data || !data.length) throw new Error('sin permiso');
+    TAR.lista[TAR.lista.indexOf(t)] = data[0];
+    if (fecha && fecha !== hoyISO()) {   // queda a la vista que la fecha no es la del día en que se marcó
+      const texto = PASO_AVISO + ' · ' + paso[2] + ': ' + fmtCorta(fecha) + ' (cargado el ' + fmtCorta(hoyISO()) + ' por ' + tarNom(SP.uid) + ').';
+      const r = await sb.from(TAR_COM_T).insert({ tarea_id: t.id, texto, autor: SP.uid }).select();
+      if (!r.error && r.data) TAR.com.push(r.data[0]);
+    }
+    toast(paso[2] + (fecha ? ' el ' + fmtCorta(fecha) + (fecha !== hoyISO() ? ' · ⚠ no es la fecha de hoy' : '') : ': fecha borrada') + (upd.estado === 'hecha' ? ' · completa' : ''));
+    return true;
+  } catch (e) {
+    toast('No se guardó: ' + (e.message || e) + (/fecha_(registro|presentacion)/.test(String(e.message)) ? ' (falta correr sql/2026-10_impuestos_proveedores.sql)' : ''));
+    return false;
+  }
+}
+// Resumen corto para tablas: "Presentado 05/10 · Pagado — · Registrado —"
+const tarPasosMini = t => (tarPasos(t) || []).map(([, c, nom]) => '<span style="white-space:nowrap;font-size:11.5px">' + (t[c] ? '✓ ' : '<span class="muted">○ ') + nom + (t[c] ? ' <span class="muted">' + fmtCorta(t[c]) + '</span>' : '</span>') + '</span>').join(' · ');
 function tarRenderLista(tabs){
   const ta = document.getElementById('topActions');
   ta.innerHTML = SP.editar ? '<button class="btn" id="tr-nueva">' + ICO.plus + 'Nueva tarea puntual</button>' : '';
@@ -617,7 +657,7 @@ function tarRenderMes(tabs){
     { id:'lista', t:'Lista', v:t => t.lista || 'Sin lista', td:t => '<span class="muted" style="font-size:11.5px">' + esc(t.lista || '—') + '</span>' },
     { id:'tit', t:'Tarea', s:t => t.titulo, cls:'wrap', td:t => '<b>' + esc(t.titulo) + '</b>' + (t.descripcion ? ' <span class="muted">· ' + esc(t.descripcion) + '</span>' : '') },
     { id:'a', t:'Responsable', v:t => tarNom(t.asignado_a), td:t => esc(tarNom(t.asignado_a)) },
-    { id:'e1', t:'Estado', v:t => TAR_EST[t.estado], td:t => selEst(t, 'estado') },
+    { id:'e1', t:'Estado', v:t => TAR_EST[t.estado], td:t => tarPasos(t) ? tarPasosMini(t) : selEst(t, 'estado') },
     { id:'est', t:'Avance', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)); return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '">' + a[1] + '</span>'; } },
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
   ];
@@ -763,19 +803,9 @@ async function impGuardarFecha(inp){
   const [id, campo] = inp.dataset.impF.split('|'), t = TAR.lista.find(x => x.id === +id); if (!t) return;
   const v = inp.value;
   if (v && !/^20\d\d-\d\d-\d\d$/.test(v)) return;
-  const n = Object.assign({}, t, { [campo]: v || null }), r = impReq(n), falta = impFaltan(n), alguna = IMP_PASOS.some(([k, c]) => r[k] && n[c]);
-  const upd = { [campo]: v || null, estado: !falta.length ? 'hecha' : alguna ? 'en_curso' : 'pendiente' };
-  if (t.reg_estado) upd.reg_estado = !r.pago || n.fecha_pago ? 'hecha' : 'pendiente';
+  if (v && v !== hoyISO() && !confirm('La fecha ' + fmtCorta(v) + ' no es la de hoy (' + fmtCorta(hoyISO()) + '). Se va a guardar igual y queda un aviso en los comentarios. ¿Seguir?')) { inp.value = t[campo] || ''; return; }
   inp.disabled = true;
-  try {
-    const { data, error } = await sb.from(TAR_T).update(upd).eq('id', t.id).select();
-    if (error) throw error; if (!data || !data.length) throw new Error('sin permiso');
-    TAR.lista[TAR.lista.indexOf(t)] = data[0];
-    const nom = IMP_PASOS.find(x => x[1] === campo);
-    toast(impNombre(t) + ': ' + (v ? nom[4] + ' el ' + fmtCorta(v) : nom[2].toLowerCase() + ' borrado') + (upd.estado === 'hecha' ? ' · completo' : ''));
-  } catch (e) {
-    toast('No se guardó: ' + (e.message || e) + (/fecha_(registro|presentacion)/.test(String(e.message)) ? ' (falta correr sql/2026-10_impuestos_proveedores.sql)' : ''));
-  }
+  await tarGuardarPaso(t, campo, v || null);
   tarRender();
 }
 function tarRenderFijas(tabs){
@@ -1086,9 +1116,28 @@ function tarTransferir(id){
     if (TAR.lista.some(x => x.id === id)) tarDetalle(id); else cerrarModal();
   });
 }
+function tarPasosHtml(t, puede){
+  const pasos = tarPasos(t), venc = t.vencimiento ? fmtCorta(t.vencimiento) : '—';
+  return '<div class="box" style="margin:10px 0 12px">'
+    + '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px"><b>' + (tarEsImp(t) ? 'Pasos del impuesto' : 'Pasos del pago') + '</b>'
+    + '<span class="muted" style="font-size:12px">Vencimiento: <b class="' + (tarVencida(t) ? 'warn' : '') + '">' + venc + '</b>' + (tarEsImp(t) ? ' (el mismo para todos los pasos)' : '') + '</span></div>'
+    + pasos.map(([k, c, nom, acl]) => {
+        const f = t[c], aviso = f && tarPasoAviso(t, nom);
+        return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--line)">'
+          + '<div style="min-width:170px">' + (f ? '✅ ' : '⬜ ') + '<b>' + esc(nom) + '</b>' + (acl ? '<div class="muted" style="font-size:11px">' + esc(acl) + '</div>' : '') + '</div>'
+          + (f
+            ? (puede ? '<input type="date" class="tc-in" style="width:auto" value="' + esc(f) + '" data-td-pfecha="' + c + '" title="Cambiar la fecha (avisa si no es la de hoy)">'
+                     + ' <button class="btn ghost sm" data-td-paso="' + c + '|borrar">Desmarcar</button>' : '<b>' + fmtCorta(f) + '</b>')
+              + (aviso ? ' <span class="warn" style="font-size:11.5px" title="Ver comentarios">⚠ fecha distinta a la del día en que se marcó</span>' : '')
+            : (puede ? '<button class="btn sm" data-td-paso="' + c + '|hoy">Marcar ' + esc(nom.toLowerCase()) + ' hoy (' + fmtCorta(hoyISO()) + ')</button>'
+                     + ' <span class="muted" style="font-size:11.5px">o con otra fecha:</span> <input type="date" class="tc-in" style="width:auto" data-td-pfecha="' + c + '">' : '<span class="muted">pendiente</span>'))
+          + '</div>'; }).join('')
+    + '<div class="muted" style="font-size:11.5px;margin-top:4px">' + (tarHecha(t) ? '✓ Completa' : 'Queda cumplida cuando están todos los pasos.') + '</div></div>';
+}
 function tarDetalle(id){
   const t = TAR.lista.find(x => x.id === id); if (!t) return;
   const edita = tarPuedeEditar(t), cambiaEstado = edita || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid;
+  const pasos = tarPasos(t);
   const coms = TAR.com.filter(c => c.tarea_id === id).sort((a,b) => String(a.creado_en).localeCompare(String(b.creado_en)));
   const adjs = TAR.adj.filter(a => a.tarea_id === id);
   const cuandoT = ts => { const d = new Date(ts); return isNaN(d) ? '' : d.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
@@ -1097,6 +1146,7 @@ function tarDetalle(id){
     '<div class="frow c3"><div><div class="muted" style="font-size:11px">ASIGNADA POR</div><b>' + esc(tarNom(t.asignado_por)) + '</b></div>'
     + '<div><div class="muted" style="font-size:11px">ASIGNADA A · RESPONSABLE</div><b>' + esc(tarNom(t.asignado_a)) + '</b>' + (tarResp(t) !== t.asignado_a ? ' <span class="muted">· responsable:</span> <b>' + esc(tarNom(tarResp(t))) + '</b>' : ' <span class="muted">(también responsable)</span>') + '</div>'
     + '<div><div class="muted" style="font-size:11px">FECHA · VENCE</div>' + fmtCorta(t.fecha) + ' · ' + (t.vencimiento ? (tarVencida(t) ? '<span class="warn"><b>' + fmtCorta(t.vencimiento) + ' (vencida)</b></span>' : fmtCorta(t.vencimiento)) : '—') + '</div></div>'
+    + (pasos ? tarPasosHtml(t, cambiaEstado) : (''
     + '<div class="frow" style="margin-top:10px"><div class="field"><label>Estado</label>' + (cambiaEstado
         ? '<select id="td-est" style="max-width:220px">' + tarEstOpts(t, 'estado', t.estado) + '</select>'
         : '<span class="badge ' + (TAR_BADGE[t.estado] || 'b-gris') + '">' + esc(tarEstNom(t, 'estado', t.estado)) + '</span>') + (t.completada_en ? ' <span class="muted" style="font-size:12px">hecha el ' + cuandoT(t.completada_en) + '</span>' : '') + '</div></div>'
@@ -1106,7 +1156,7 @@ function tarDetalle(id){
           ? '<select id="td-rest" style="max-width:220px">' + tarEstOpts(t, 'reg_estado', t.reg_estado) + '</select>'
           : '<span class="badge ' + (TAR_BADGE[t.reg_estado] || 'b-gris') + '">' + esc(tarEstNom(t, 'reg_estado', t.reg_estado)) + '</span>') + '</div></div>' : '')
     + (tarEsPago(t, t.reg_estado ? 'reg_estado' : 'estado') && t[t.reg_estado ? 'reg_estado' : 'estado'] === 'hecha'
-        ? '<div class="frow" style="margin-top:4px"><div class="field"><label>Fecha de pago</label>' + (cambiaEstado ? '<input type="date" id="td-fpago" value="' + esc(t.fecha_pago || '') + '" style="max-width:220px">' : '<b>' + (t.fecha_pago ? fmtCorta(t.fecha_pago) : '—') + '</b>') + '</div></div>' : '')
+        ? '<div class="frow" style="margin-top:4px"><div class="field"><label>Fecha de pago</label>' + (cambiaEstado ? '<input type="date" id="td-fpago" value="' + esc(t.fecha_pago || '') + '" style="max-width:220px">' : '<b>' + (t.fecha_pago ? fmtCorta(t.fecha_pago) : '—') + '</b>') + '</div></div>' : '')))
     + (t.descripcion ? '<div class="box" style="white-space:pre-wrap;margin:6px 0 12px">' + esc(t.descripcion) + '</div>' : '')
     + '<h4 style="margin:12px 0 6px">Adjuntos (' + adjs.length + ')</h4>'
     + (adjs.length ? '<div class="hist" style="max-height:180px">' + adjs.map(a => '<div class="it">📎 <a href="#" data-td-bajar="' + a.id + '">' + esc(a.nombre) + '</a> <span class="muted">' + kb(a.tamano) + ' · ' + esc(tarNom(a.subido_por)) + ' · ' + cuandoT(a.creado_en) + '</span>'
@@ -1129,6 +1179,16 @@ function tarDetalle(id){
       TAR.lista = TAR.lista.filter(x => x.id !== id); TAR.com = TAR.com.filter(c => c.tarea_id !== id); TAR.adj = TAR.adj.filter(a => a.tarea_id !== id);
       cerrarModal(); toast('Tarea eliminada (archivada en el historial)'); TAR.cargado = false; tarCargar(); } catch (e) { err('No se pudo: ' + (e.message || e)); } });
   if ($('td-rest')) $('td-rest').addEventListener('change', e => tarCambiarEstado(id, 'reg_estado', e.target.value, true));
+  // pasos: "Marcar" = fecha de hoy; cambiar la fecha a otro día pide confirmación (y deja el comentario de aviso)
+  $('modalBody').querySelectorAll('[data-td-paso]').forEach(b => b.addEventListener('click', async () => {
+    const [campo, accion] = b.dataset.tdPaso.split('|'); b.disabled = true;
+    if (accion === 'borrar' && !confirm('¿Borrar la fecha? El paso vuelve a pendiente.')) { b.disabled = false; return; }
+    await tarGuardarPaso(TAR.lista.find(x => x.id === id), campo, accion === 'hoy' ? hoyISO() : null); tarRender(); tarDetalle(id); }));
+  $('modalBody').querySelectorAll('input[data-td-pfecha]').forEach(inp => inp.addEventListener('change', async () => {
+    const campo = inp.dataset.tdPfecha, v = inp.value, tt = TAR.lista.find(x => x.id === id);
+    if (!/^20\d\d-\d\d-\d\d$/.test(v)) { inp.value = tt[campo] || ''; return; }
+    if (v !== hoyISO() && !confirm('La fecha ' + fmtCorta(v) + ' no es la de hoy (' + fmtCorta(hoyISO()) + '). Se va a guardar igual y queda un aviso en los comentarios de la tarea. ¿Seguir?')) { inp.value = tt[campo] || ''; return; }
+    await tarGuardarPaso(tt, campo, v); tarRender(); tarDetalle(id); }));
   if ($('td-est')) $('td-est').addEventListener('change', e => tarCambiarEstado(id, 'estado', e.target.value, true));
   if ($('td-fpago')) $('td-fpago').addEventListener('change', async e => {
     if (!/^20\d\d-\d\d-\d\d$/.test(e.target.value)) return;
