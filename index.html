@@ -621,6 +621,8 @@ function tarRenderMes(tabs){
     { id:'est', t:'Avance', v:t => TAR_AV.find(a => a[0] === tarAv(t))[1], td:t => { const a = TAR_AV.find(x => x[0] === tarAv(t)); return '<span class="badge" style="background:' + a[2] + '1f;color:' + a[2] + '">' + a[1] + '</span>'; } },
     { id:'acc', t:'', td:t => '<button class="btn ghost sm" data-tr-ver="' + t.id + '">Abrir</button>' },
   ];
+  // la columna del vto de pago (segunda etapa) solo si alguna tarea del mes lo tiene
+  if (!xs.some(t => t.reg_estado)) cols.splice(cols.findIndex(c => c.id === 'reg'), 1);
   TABLAS.tarm = { cols, base: () => filas };
   const f = tablaFiltrar('tarm', cols, filas, t => [t.lista, t.titulo, t.descripcion, tarNom(t.asignado_a)].join(' '));
   $main.innerHTML = tabs + avisoFaltan
