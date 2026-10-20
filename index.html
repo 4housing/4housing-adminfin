@@ -431,6 +431,8 @@ async function tarCargar(){
     // tareas fijas mensuales (sql/2026-10_tareas_fijas.sql): si falta correrlo, el resto de Tareas sigue andando
     try { const [fijas, meses] = await Promise.all([selTodo(TAR_FIJ_T, '*', 'orden'), selTodo(TAR_MES_T, '*', 'periodo')]); Object.assign(TAR, { fijas, meses, errFij:'' }); }
     catch (e) { Object.assign(TAR, { fijas:[], meses:[], errFij: e.message || String(e) }); }
+    // índice mensual guardado al cerrar cada mes (sql/2026-10_tareas_indice.sql)
+    try { TAR.indices = await selTodo('adminfin_tareas_indices', '*', 'id'); TAR.errInd = ''; } catch (e) { TAR.indices = []; TAR.errInd = e.message || String(e); }
     // feriados (sql/2026-10_tareas_vencimientos.sql): para calcular días hábiles
     try { TAR.feriados = await selTodo('adminfin_feriados', '*', 'fecha'); TAR.errFer = ''; } catch (e) { TAR.feriados = []; TAR.errFer = e.message || String(e); }
     // historial (sql/2026-10_tareas_historial.sql): solo supervisión
@@ -444,7 +446,7 @@ async function tarCargar(){
 // de la página y el de cada tabla; si cambió la solapa / el mes / la lista, arranca desde arriba.
 let TAR_VISTA = '';
 function tarRender(){
-  const vista = [VISTA, TAR.impPer, TAR.cat, TAR.modo, TAR.per, TAR.fijLista, TAR.vista, TAR.estado, TAR.mesVer, TAR.histVer].join('|'), misma = vista === TAR_VISTA;
+  const vista = [VISTA, TAR.impPer, TAR.cat, TAR.indAgr, TAR.modo, TAR.per, TAR.fijLista, TAR.vista, TAR.estado, TAR.mesVer, TAR.histVer].join('|'), misma = vista === TAR_VISTA;
   const y = window.scrollY, x = window.scrollX, tablas = misma ? [...$main.querySelectorAll('.tbl-hscroll')].map(t => [t.scrollTop, t.scrollLeft]) : [];
   TAR_VISTA = vista;
   tarRender0();
@@ -457,9 +459,9 @@ function tarRender0(){
   if (VISTA === 'imp') { impRender(); return; }
   if (TAR.err) { $main.innerHTML = '<div class="card"><div class="empty">No pude leer las tareas: ' + esc(TAR.err) + '<br><span class="muted">Falta correr sql/2026-10_tareas.sql en Supabase.</span></div></div>'; return; }
   const m = (id, l) => '<button class="mtab' + (TAR.modo === id ? ' active' : '') + '" data-tr-modo="' + id + '">' + l + '</button>';
-  const tabs = '<div class="mtabs" style="margin:0 0 14px">' + m('mes', 'Tareas del mes') + m('lista', 'Todas las tareas') + m('fijas', 'Tareas fijas (plantilla)') + (TAR.sup ? m('hist', 'Historial y eliminadas') : '') + '</div>';
+  const tabs = '<div class="mtabs" style="margin:0 0 14px">' + m('mes', 'Tareas del mes') + m('lista', 'Todas las tareas') + m('fijas', 'Tareas fijas (plantilla)') + m('indice', 'Índice mensual') + (TAR.sup ? m('hist', 'Historial y eliminadas') : '') + '</div>';
   if (TAR.modo === 'hist' && !TAR.sup) TAR.modo = 'mes';
-  if (TAR.modo === 'mes') tarRenderMes(tabs); else if (TAR.modo === 'hist') tarRenderHist(tabs); else if (TAR.modo === 'fijas') tarRenderFijas(tabs); else tarRenderLista(tabs);
+  if (TAR.modo === 'mes') tarRenderMes(tabs); else if (TAR.modo === 'indice') tarRenderIndice(tabs); else if (TAR.modo === 'hist') tarRenderHist(tabs); else if (TAR.modo === 'fijas') tarRenderFijas(tabs); else tarRenderLista(tabs);
   $main.querySelectorAll('[data-tr-modo]').forEach(b => b.addEventListener('click', () => { TAR.modo = b.dataset.trModo; tarRender(); }));
 }
 // Categorías de "Todas las tareas": por lista de la plantilla; lo que no es de ninguna (puntuales, agregadas a mano) = Tareas varias
@@ -586,8 +588,21 @@ function tarAvEt(e){
   if (e.vencimiento && String(e.vencimiento) < hoyISO()) return 'venc';
   return e.estado === 'en_curso' ? 'curso' : 'pend';
 }
+// Fecha en que se cumplió (igual que public.adminfin_tareas_fecha_cumplida): Impuestos y Proveedores = última fecha
+// de sus pasos (la cargada); el resto = día en que se marcó (y su etapa de pago, si tiene).
+function tarFechaCumplida(t){
+  if (!tarHecha(t)) return '';
+  const pasos = tarPasos(t), fs = pasos ? pasos.map(p => t[p[1]]).filter(Boolean).sort() : [];
+  if (fs.length) return String(fs[fs.length - 1]).slice(0, 10);
+  return [t.completada_en, t.reg_completada_en].filter(Boolean).map(hoyLocal).sort().pop() || '';
+}
 // avance de la tarea: cumplida cuando todas sus etapas lo están (a tiempo si todas a tiempo)
 function tarAv(t){
+  if (tarPasos(t)) {   // Impuestos / Proveedores: la última fecha de sus pasos contra el vencimiento
+    if (tarHecha(t)) { const d = tarFechaCumplida(t); return !t.vencimiento || !d || d <= String(t.vencimiento) ? 'tiempo' : 'tarde'; }
+    if (t.vencimiento && String(t.vencimiento) < hoyISO()) return 'venc';
+    return t.estado === 'en_curso' ? 'curso' : 'pend';
+  }
   const ks = tarEtapas(t).map(tarAvEt);
   if (ks.every(k => k === 'tiempo' || k === 'tarde')) return ks.includes('tarde') ? 'tarde' : 'tiempo';
   if (ks.includes('venc')) return 'venc';
@@ -626,7 +641,7 @@ function tarRenderMes(tabs){
   const pend = xsMes.length - xsMes.filter(tarHecha).length, pct = v => xs.length ? Math.round(v / xs.length * 100) + '%' : '—';
   if (SP.editar) ta.innerHTML = '<button class="btn ghost" id="tr-puntual">' + ICO.plus + 'Nueva tarea puntual</button>';
   if (TAR.sup && !cerrado && TAR.per === abierto)
-    ta.innerHTML += '<button class="btn ghost" id="tm-agregar">' + ICO.plus + 'Agregar tarea al mes</button><button class="btn" id="tm-cerrar"' + (pend ? ' disabled title="Faltan ' + pend + ' tarea(s) sin cumplir"' : '') + '>Cerrar ' + esc(tarMesNom(TAR.per)) + '</button>';
+    ta.innerHTML += '<button class="btn ghost" id="tm-agregar">' + ICO.plus + 'Agregar tarea al mes</button><button class="btn" id="tm-cerrar"' + (pend ? ' title="Quedan ' + pend + ' tarea(s) sin cumplir: se registran como sin cumplir al cierre"' : '') + '>Cerrar ' + esc(tarMesNom(TAR.per)) + '</button>';
   const kpi = (l, v, sub, warn) => '<div class="kpi"><div class="kpi-label">' + l + '</div><div class="kpi-value' + (warn ? ' warn' : '') + '">' + v + '</div><div class="kpi-sub">' + sub + '</div></div>';
   // agrupaciones para los gráficos (orden de las listas = orden de la plantilla)
   const ordFija = t => { const f = TAR.fijas.find(x => x.id === t.fija_id); return f ? f.orden : 1e9; };   // orden de la plantilla
@@ -643,7 +658,7 @@ function tarRenderMes(tabs){
   const verTodo = TAR.mesVer === 'todas', filas = xs.filter(t => verTodo || !tarHecha(t))
     .sort((a, b) => String(a.vencimiento || '9999').localeCompare(String(b.vencimiento || '9999')) || ordFija(a) - ordFija(b) || a.id - b.id);
   const puedeEst = t => tarPuedeEditar(t) || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid;
-  const selEst = (t, campo) => { const v = t[campo], ok = puedeEst(t) && !cerrado;
+  const selEst = (t, campo) => { const v = t[campo], ok = puedeEst(t) && (!cerrado || !tarHecha(t));   // mes cerrado: solo lo que quedó sin cumplir
     return '<select class="tc-in tst-' + v + '" style="width:auto;text-align:left" data-tm-est="' + t.id + '|' + campo + '"' + (ok ? '' : ' disabled') + '>'
       + tarEstOpts(t, campo, v) + '</select>' + (tarEsPago(t, campo) && v === 'hecha' && t.fecha_pago ? ' <span class="muted" style="font-size:11.5px" title="Fecha de pago">' + fmtCorta(t.fecha_pago) + '</span>' : ''); };
   // fecha de vencimiento del mes: la calcula la plantilla; supervisión la puede ajustar para este mes (clic en la fecha)
@@ -668,7 +683,7 @@ function tarRenderMes(tabs){
   $main.innerHTML = tabs + avisoFaltan
     + '<div class="tools" style="padding:0 0 12px"><span style="font-size:12px;color:var(--muted)">Mes</span><select class="tc-in" style="width:auto;text-align:left" id="tm-sel">'
     + TAR.meses.slice().reverse().map(m => '<option value="' + m.periodo + '"' + (m.periodo === TAR.per ? ' selected' : '') + '>' + tarCierreNom(m.periodo) + (m.cerrado_en ? ' · cerrado' : ' · abierto') + '</option>').join('') + '</select>'
-    + (cerrado ? '<span class="badge b-verde">Cerrado el ' + fmtCorta(hoyLocal(cerrado)) + '</span>' : pend ? '<span class="muted" style="font-size:12.5px">Para cerrar el mes tienen que estar todas cumplidas (y pagadas, si tienen vto de pago): faltan <b>' + pend + '</b>.</span>' : '<span class="badge b-verde">Todo cumplido: se puede cerrar</span>')
+    + (cerrado ? '<span class="badge b-verde">Cerrado el ' + fmtCorta(hoyLocal(cerrado)) + '</span>' : pend ? '<span class="muted" style="font-size:12.5px">Sin cumplir: <b>' + pend + '</b>. Si se cierra así, quedan en el índice como «sin cumplir al cierre».</span>' : '<span class="badge b-verde">Todo cumplido: se puede cerrar</span>')
     + (TAR.sup ? '' : '<span class="muted" style="font-size:12px;margin-left:auto">Ves solo tus tareas.</span>') + '</div>'
     + '<div class="kpi-grid">' + kpi('Avance', pct(nH), nH + ' de ' + xs.length + ' cumplidas') + kpi('Cumplidas a tiempo', pct(nT), nT + ' tareas') + kpi('Sin cumplir', xs.length - nH, xs.filter(t => tarAv(t) === 'curso').length + ' en gestión')
     + kpi('Vencidas', nV, 'sin cumplir y pasadas de fecha', nV > 0) + '</div>'
@@ -720,11 +735,12 @@ function tarMesEventos(){
     toast(tarMesNom(per) + ' abierto · ' + data + ' tareas generadas'); TAR.per = per; TAR.cargado = false; await tarCargar(); });
   if ($('tm-cerrar')) $('tm-cerrar').addEventListener('click', async () => {
     const per = TAR.per, [a, m] = per.split('-').map(Number), sig = (m === 12 ? a + 1 : a) + '-' + String(m === 12 ? 1 : m + 1).padStart(2, '0');
-    if (!confirm('¿Cerrar ' + tarMesNom(per) + '? Se generan las tareas de ' + tarMesNom(sig) + '.')) return;
+    const pendC = TAR.lista.filter(t => t.periodo === per && !tarHecha(t)).length;
+    if (!confirm('¿Cerrar ' + tarMesNom(per) + '? Se guarda el índice del mes' + (pendC ? ' con ' + pendC + ' tarea(s) SIN CUMPLIR al cierre (siguen en el mes y se pueden cumplir después, fuera de término)' : '') + ' y se generan las tareas de ' + tarMesNom(sig) + '.')) return;
     $('tm-cerrar').disabled = true;
     const { data, error } = await sb.rpc('adminfin_tareas_cerrar_mes', { p_periodo: per });
     if (error) { toast('No se pudo cerrar: ' + error.message); $('tm-cerrar').disabled = false; return; }
-    toast(tarMesNom(per) + ' cerrado · ' + tarMesNom(sig) + ': ' + data + ' tareas generadas'); TAR.per = sig; TAR.cargado = false; await tarCargar(); });
+    toast(tarMesNom(per) + ' cerrado (índice guardado) · ' + tarMesNom(sig) + ': ' + data + ' tareas generadas'); TAR.per = sig; TAR.cargado = false; await tarCargar(); });
 }
 /* ---------- Impuestos: las tareas del mes de la lista "Impuestos" (Pago y Registro AGIP, ARBA, Sicore, SUSS, CM, IVA) ----------
    Mismos datos que Tareas (adminfin_tareas). Todos tienen F. de vencimiento (reg_vencimiento: el vto impositivo, para
@@ -758,7 +774,7 @@ function impRender(){
   const per = TAR.impPer, mes = TAR.meses.find(m => m.periodo === per) || {}, cerrado = mes.cerrado_en;
   const xs = TAR.lista.filter(t => t.periodo === per && tarEsImp(t))
     .sort((a, b) => String(impVto(a) || '9999').localeCompare(String(impVto(b) || '9999')) || a.id - b.id);
-  const puede = t => !cerrado && (tarPuedeEditar(t) || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid);
+  const puede = t => (!cerrado || impFaltan(t).length) && (tarPuedeEditar(t) || t.asignado_a === SP.uid || tarResp(t) === SP.uid || t.reg_responsable === SP.uid);
   const paso = (t, k, campo) => !impReq(t)[k] ? '<span class="muted" style="font-size:11px">no requiere</span>'
     : puede(t) ? '<input type="date" class="tc-in' + (t[campo] ? '' : ' vacio') + '" style="width:auto" value="' + esc(t[campo] || '') + '" data-imp-f="' + t.id + '|' + campo + '">'
     : (t[campo] ? fmtCorta(t[campo]) : '<span class="warn">pendiente</span>');
@@ -807,6 +823,70 @@ async function impGuardarFecha(inp){
   inp.disabled = true;
   await tarGuardarPaso(t, campo, v || null);
   tarRender();
+}
+/* ---------- Índice mensual: por mes, cuántas tareas se cumplieron a tiempo, fuera de término o quedaron sin cumplir
+   al cierre. Meses cerrados: la foto guardada al cerrar (adminfin_tareas_indices, no cambia). Mes abierto: en vivo,
+   con la misma regla (tarAv). "Fecha a mano" = tareas con algún paso cargado con otra fecha que la del día (auditar). */
+function tarRenderIndice(tabs){
+  if (TAR.errInd) { $main.innerHTML = tabs + '<div class="card"><div class="empty">No pude leer el índice: ' + esc(TAR.errInd) + '<br><span class="muted">Falta correr sql/2026-10_tareas_indice.sql en Supabase.</span></div></div>'; return; }
+  const ta = document.getElementById('topActions'); ta.innerHTML = '<button class="btn ghost" id="ti-xls">' + ICO.xls + 'Exportar Excel</button>';
+  const manual = t => TAR.com.some(c => c.tarea_id === t.id && String(c.texto || '').startsWith(PASO_AVISO));
+  // filas: [periodo, lista, responsable, total, tiempo, tarde, sin, manual, guardado]
+  const filas = TAR.indices.map(r => ({ periodo:r.periodo, lista:r.lista, resp:r.responsable, total:r.total, tiempo:r.a_tiempo, tarde:r.fuera_termino, sin:r.sin_cumplir, manual:r.fecha_manual, foto:true }));
+  const abierto = tarMesAbierto();
+  if (abierto) {
+    const g = {};
+    TAR.lista.filter(t => t.periodo === abierto).forEach(t => {
+      const k = (t.lista || 'Sin lista') + '|' + (tarResp(t) || ''), a = tarAv(t);
+      const o = (g[k] = g[k] || { periodo:abierto, lista:t.lista || 'Sin lista', resp:tarResp(t), total:0, tiempo:0, tarde:0, sin:0, manual:0, foto:false });
+      o.total++; if (a === 'tiempo') o.tiempo++; else if (a === 'tarde') o.tarde++; else o.sin++; if (manual(t)) o.manual++;
+    });
+    filas.push(...Object.values(g));
+  }
+  const agr = TAR.indAgr || 'mes';
+  const clave = r => agr === 'lista' ? r.periodo + '|' + r.lista : agr === 'resp' ? r.periodo + '|' + (r.resp || '') : r.periodo;
+  const grupos = {};
+  filas.forEach(r => { const k = clave(r), o = (grupos[k] = grupos[k] || { periodo:r.periodo, lista:r.lista, resp:r.resp, total:0, tiempo:0, tarde:0, sin:0, manual:0, foto:r.foto });
+    ['total', 'tiempo', 'tarde', 'sin', 'manual'].forEach(c => { o[c] += r[c]; }); });
+  const xs = Object.values(grupos).sort((a, b) => b.periodo.localeCompare(a.periodo) || String(a.lista).localeCompare(String(b.lista)) || tarNom(a.resp).localeCompare(tarNom(b.resp)));
+  const pct = (v, n) => n ? Math.round(v / n * 100) + '%' : '—';
+  const cel = (v, n, c) => '<b' + (c ? ' style="color:' + c + '"' : '') + '>' + v + '</b> <span class="muted">' + pct(v, n) + '</span>';
+  const cols = [
+    { id:'mes', t:'Mes (cierre)', v:r => tarMesNom(r.periodo), td:r => '<b>' + esc(tarMesNom(r.periodo)) + '</b>' + (r.foto ? '' : ' <span class="badge b-azul">en curso</span>') },
+  ].concat(agr === 'lista' ? [{ id:'lista', t:'Lista', v:r => r.lista, td:r => esc(r.lista) }] : agr === 'resp' ? [{ id:'resp', t:'Responsable', v:r => tarNom(r.resp), td:r => esc(tarNom(r.resp)) }] : [])
+  .concat([
+    { id:'tot', t:'Tareas', s:r => r.total, cls:'num', td:r => r.total },
+    { id:'tiempo', t:'Cumplidas a tiempo', s:r => r.total ? r.tiempo / r.total : 0, cls:'num', td:r => cel(r.tiempo, r.total, '#3f7f45') },
+    { id:'tarde', t:'Fuera de término', s:r => r.total ? r.tarde / r.total : 0, cls:'num', td:r => cel(r.tarde, r.total, '#9a7a2a') },
+    { id:'sin', t:'Sin cumplir al cierre', s:r => r.total ? r.sin / r.total : 0, cls:'num', td:r => cel(r.sin, r.total, r.sin ? '#c0504a' : '') + (r.foto ? '' : ' <span class="muted" title="El mes sigue abierto">(hoy)</span>') },
+    { id:'man', t:'Con fecha cargada a mano', s:r => r.manual, cls:'num', td:r => r.manual ? '<span class="warn">⚠ ' + r.manual + '</span>' : '<span class="muted">—</span>' },
+  ]);
+  TABLAS.tind = { cols, base: () => xs };
+  const f = tablaFiltrar('tind', cols, xs, r => [tarMesNom(r.periodo), r.lista, tarNom(r.resp)].join(' '));
+  // gráfico: un barra apilada por mes (últimos 12)
+  const meses = [...new Set(filas.map(r => r.periodo))].sort().slice(-12), tot = p => { const o = { total:0, tiempo:0, tarde:0, sin:0 }; filas.filter(r => r.periodo === p).forEach(r => ['total', 'tiempo', 'tarde', 'sin'].forEach(c => { o[c] += r[c]; })); return o; };
+  const graf = meses.length ? '<div style="display:flex;gap:10px;align-items:flex-end;padding:12px 16px;overflow-x:auto">' + meses.map(p => { const o = tot(p), h = c => o.total ? Math.max(o[c] ? 3 : 0, Math.round(o[c] / o.total * 140)) : 0;
+      return '<div style="text-align:center;min-width:64px" title="' + esc(tarMesNom(p)) + ': ' + o.tiempo + ' a tiempo · ' + o.tarde + ' fuera de término · ' + o.sin + ' sin cumplir (de ' + o.total + ')">'
+        + '<div style="font-size:12px;font-weight:700">' + pct(o.tiempo, o.total) + '</div>'
+        + '<div style="height:140px;width:34px;margin:4px auto;display:flex;flex-direction:column-reverse;border-radius:5px;overflow:hidden;background:#eceae1">'
+        + '<span style="height:' + h('tiempo') + 'px;background:#3f7f45"></span><span style="height:' + h('tarde') + 'px;background:#c9a54a"></span><span style="height:' + h('sin') + 'px;background:#c0504a"></span></div>'
+        + '<div class="muted" style="font-size:11px">' + TAR_MESES[+p.slice(5) - 1].slice(0, 3) + ' ' + p.slice(2, 4) + (p === abierto ? '*' : '') + '</div></div>'; }).join('') + '</div>'
+      + '<div class="tleg" style="padding:0 16px 12px"><span><i style="background:#3f7f45"></i>A tiempo</span><span><i style="background:#c9a54a"></i>Fuera de término</span><span><i style="background:#c0504a"></i>Sin cumplir al cierre</span><span class="muted">* mes abierto (en vivo)</span></div>' : '';
+  const sel = '<select class="tc-in" style="width:auto;text-align:left" id="ti-agr">' + [['mes', 'Total del mes'], ['lista', 'Por lista'], ['resp', 'Por responsable']].map(([k, l]) => '<option value="' + k + '"' + (agr === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>';
+  $main.innerHTML = tabs
+    + '<div class="card">' + cardH('Índice mensual', '% de tareas cumplidas a tiempo, fuera de término o sin cumplir al cierre de cada mes. Los meses cerrados muestran la foto guardada al cerrar; el abierto, cómo va hoy.') + graf + '</div>'
+    + '<div class="card" style="margin-top:14px">' + cardH('Detalle', TAR.sup ? 'Ves todas las tareas.' : 'Ves tus tareas.')
+    + '<div class="tools" style="padding-bottom:0"><span style="font-size:12px;color:var(--muted)">Ver</span>' + sel + '</div>'
+    + (xs.length ? tablaHerramientas('tind', 'Buscar mes, lista o persona…') + tablaHtml('tind', cols, f) : '<div class="empty">Todavía no hay meses para mostrar.</div>') + '</div>';
+  tablaEventos();
+  document.getElementById('ti-agr').addEventListener('change', e => { TAR.indAgr = e.target.value; tarRender(); });
+  document.getElementById('ti-xls').addEventListener('click', () => {
+    if (!window.XLSX) { toast('No cargó la librería de Excel'); return; }
+    const datos = f.map(r => Object.assign({ 'Mes': tarMesNom(r.periodo), 'Estado del mes': r.foto ? 'Cerrado (índice guardado)' : 'Abierto (en vivo)' },
+      agr === 'lista' ? { 'Lista': r.lista } : agr === 'resp' ? { 'Responsable': tarNom(r.resp) } : {},
+      { 'Tareas': r.total, 'A tiempo': r.tiempo, '% a tiempo': r.total ? +(r.tiempo / r.total * 100).toFixed(1) : null, 'Fuera de término': r.tarde, 'Sin cumplir al cierre': r.sin, 'Con fecha cargada a mano': r.manual }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(datos), 'Índice'); XLSX.writeFile(wb, 'Indice_tareas_' + hoyISO() + '.xlsx');
+  });
 }
 function tarRenderFijas(tabs){
   const ta = document.getElementById('topActions');
