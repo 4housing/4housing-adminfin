@@ -103,9 +103,14 @@ begin
 end $$;
 revoke all on function public.adminfin_tareas_generar(text, bigint) from public, anon, authenticated;
 
--- Mes abierto: los impuestos ya generados toman los tildes de la plantilla.
+-- Mes abierto: los impuestos ya generados toman la lista y los tildes de la plantilla.
 -- Lo ya registrado por estado (sin fecha) conserva la fecha en que se marcó; si ahora también requiere presentación
 -- y no está presentado, vuelve a "En gestión"; si no requiere pago, el pago queda resuelto.
+-- (si el mes se generó cuando los impuestos todavía estaban en "Supervisión", pasan a la lista Impuestos)
+update public.adminfin_tareas t set lista = f.lista
+  from public.adminfin_tareas_fijas f
+ where t.fija_id = f.id and f.lista ilike 'impuesto%' and t.lista is distinct from f.lista
+   and t.periodo in (select periodo from public.adminfin_tareas_meses where cerrado_en is null);
 update public.adminfin_tareas t
    set fecha_registro = coalesce(t.fecha_registro, case when t.estado = 'hecha' then (t.completada_en at time zone 'America/Argentina/Buenos_Aires')::date end),
        req_presentacion = f.req_presentacion, req_pago = f.req_pago, req_registro = f.req_registro
