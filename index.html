@@ -460,9 +460,9 @@ function tarRender0(){
   const ta = document.getElementById('topActions'); ta.innerHTML = '';
   if (TAR.err) { $main.innerHTML = '<div class="card"><div class="empty">No pude leer las tareas: ' + esc(TAR.err) + '<br><span class="muted">Falta correr sql/2026-10_tareas.sql en Supabase.</span></div></div>'; return; }
   const m = (id, l) => '<button class="mtab' + (TAR.modo === id ? ' active' : '') + '" data-tr-modo="' + id + '">' + l + '</button>';
-  const tabs = '<div class="mtabs" style="margin:0 0 14px">' + m('mes', 'Tareas del mes') + m('lista', 'Todas las tareas') + m('fijas', 'Tareas fijas (plantilla)') + m('indice', 'Índice mensual') + (TAR.sup ? m('hist', 'Historial y eliminadas') : '') + '</div>';
+  const tabs = '<div class="mtabs" style="margin:0 0 14px">' + m('mes', 'Tareas del mes') + m('lista', 'Todas las tareas') + m('fijas', 'Tareas fijas (plantilla)') + m('indice', 'Índice mensual') + (TAR.sup ? m('hist', 'Historial y eliminadas') : '') + m('ayuda', 'Instructivo') + '</div>';
   if (TAR.modo === 'hist' && !TAR.sup) TAR.modo = 'mes';
-  if (TAR.modo === 'mes') tarRenderMes(tabs); else if (TAR.modo === 'indice') tarRenderIndice(tabs); else if (TAR.modo === 'hist') tarRenderHist(tabs); else if (TAR.modo === 'fijas') tarRenderFijas(tabs); else tarRenderLista(tabs);
+  if (TAR.modo === 'mes') tarRenderMes(tabs); else if (TAR.modo === 'ayuda') tarRenderAyuda(tabs); else if (TAR.modo === 'indice') tarRenderIndice(tabs); else if (TAR.modo === 'hist') tarRenderHist(tabs); else if (TAR.modo === 'fijas') tarRenderFijas(tabs); else tarRenderLista(tabs);
   $main.querySelectorAll('[data-tr-modo]').forEach(b => b.addEventListener('click', () => { TAR.modo = b.dataset.trModo; tarRender(); }));
 }
 // Categorías de "Todas las tareas": por lista de la plantilla; lo que no es de ninguna (puntuales, agregadas a mano) = Tareas varias
@@ -1028,6 +1028,58 @@ function tarFijasPlan(rows){
     if (Object.keys(upd).length) plan.cambios.push({ id: f0.id, titulo: f0.titulo, upd, txt: cambios.length ? cambios : ['iguala el plazo interno de la tarea al vto (sin cambios a la vista)'] }); else plan.igual++;
   });
   return plan;
+}
+/* ---------- Instructivo de Tareas (texto fijo; si cambia el circuito, actualizar acá) ---------- */
+function tarRenderAyuda(tabs){
+  document.getElementById('topActions').innerHTML = '';
+  const sec = (tit, html) => '<div class="card" style="margin-top:14px">' + cardH(tit, '') + '<div class="guia">' + html + '</div></div>';
+  const sup = ' <span class="badge b-azul" title="Lo hace quien tiene el tilde «Tareas · ver todas» en el portal">supervisión</span>';
+  const ir = (modo, txt) => '<a href="#" data-ay-ir="' + modo + '">' + txt + '</a>';
+  $main.innerHTML = tabs + '<style>.guia{padding:12px 18px 16px;font-size:13px;line-height:1.6}.guia ol,.guia ul{margin:4px 0 8px;padding-left:22px}.guia li{margin:3px 0}.guia h4{margin:12px 0 4px;font-size:13px}.guia .nota{background:#faf9f4;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12.5px}</style>'
+    + sec('Cómo se organiza', '<ul>'
+      + '<li><b>' + ir('mes', 'Tareas del mes') + ':</b> las tareas del cierre que está abierto, con su avance, por lista y por responsable.</li>'
+      + '<li><b>' + ir('lista', 'Todas las tareas') + ':</b> por tipo — <b>Cierre de mes</b>, <b>Impuestos</b>, <b>Proveedores</b> y <b>Tareas varias</b> (puntuales). En cada una, «Ver» filtra: todas, <b>las mías</b>, creadas por mí o delegadas.</li>'
+      + '<li><b>' + ir('fijas', 'Tareas fijas (plantilla)') + ':</b> las tareas que se generan todos los meses, con su responsable y su vencimiento. También los <b>feriados</b>.</li>'
+      + '<li><b>' + ir('indice', 'Índice mensual') + ':</b> cuántas tareas se cumplieron a tiempo, fuera de término o quedaron sin cumplir al cierre de cada mes.</li>'
+      + '<li><b>Historial y eliminadas:</b> quién cambió qué y las tareas borradas (se pueden restaurar).' + sup + '</li></ul>')
+    + sec('El ciclo de cada mes', '<ol>'
+      + '<li><b>Cerrar el mes.</b> En Tareas del mes → «Cerrar <i>mes</i>».' + sup + ' Se puede cerrar aunque falten tareas: quedan como «sin cumplir al cierre» en el índice, y se pueden cumplir después (cuentan fuera de término). Al cerrar se guarda el índice del mes; <b>no</b> se generan todavía las tareas del mes siguiente.</li>'
+      + '<li><b>Revisar la plantilla.</b> En ' + ir('fijas', 'Tareas fijas') + ': responsables, vencimientos, qué tareas están activas. Para muchas juntas: <b>Exportar Excel</b> → cambiar → <b>Importar Excel</b> (ver abajo).' + sup + '</li>'
+      + '<li><b>Revisar los feriados</b> del mes que viene (abajo de la plantilla). Los días hábiles se calculan con ellos al generar.' + sup + '</li>'
+      + '<li><b>Generar el mes nuevo.</b> En Tareas del mes → «Generar tareas de <i>mes</i>».' + sup + ' Se crean todas las tareas activas de la plantilla, con su responsable y vencimiento. Los cambios que se hagan después en la plantilla valen recién para el mes siguiente.</li>'
+      + '<li>Durante el mes, cada uno <b>marca sus tareas</b> (ver «Cómo se cumple una tarea»). Si hace falta algo que no está en la plantilla: «Agregar tarea al mes»' + sup + ' o «Nueva tarea puntual».</li></ol>'
+      + '<div class="nota">Ejemplo: se cierra septiembre → se ajusta la plantilla (ej. un proveedor que factura en octubre y vence en octubre pasa a «mismo mes») → «Generar tareas de Octubre».</div>')
+    + sec('Vencimientos', '<ul>'
+      + '<li><b>Cierre de mes:</b> vto para cumplir la tarea.</li>'
+      + '<li><b>Proveedores:</b> vto de pago de la factura.</li>'
+      + '<li><b>Impuestos:</b> vto del impuesto — presentación y pago vencen ese día; el <b>registro contable</b> vence <b>2 días hábiles después</b>.</li></ul>'
+      + 'Cómo se carga en la plantilla:<ul>'
+      + '<li><b>Día</b> = ese día del mes; si cae sábado, domingo o feriado, pasa al siguiente hábil. <b>Hábil n°</b> = el n° de día hábil del mes (ej. 5° hábil).</li>'
+      + '<li><b>mes sig.</b> = el mes siguiente al cierre (cierre septiembre → vence en octubre). <b>mismo mes</b> = el mismo mes del cierre.</li>'
+      + '<li>La columna «Vence (cierre …)» muestra la fecha que va a dar en el próximo mes a generar.</li></ul>')
+    + sec('Cómo se cumple una tarea', '<h4>Cierre de mes y tareas varias</h4><ul>'
+      + '<li>Cambiar el Estado a <b>Cumplido</b>: la app propone la <b>fecha de hoy</b>. Si se cumplió otro día, se cambia (no puede ser futura).</li>'
+      + '<li>Para corregirla después: «Abrir» la tarea → «Cumplido el».</li></ul>'
+      + '<h4>Impuestos</h4><ul><li>Tres pasos con fecha: <b>Presentado</b> (DDJJ presentada / VEP generado), <b>Pagado</b> y <b>Registrado</b> (registro contable). Se cargan desde Todas las tareas → Impuestos (columnas) o al abrir la tarea («Marcar … hoy»).</li>'
+      + '<li>Queda cumplida cuando están los tres; con alguno, «En gestión».</li></ul>'
+      + '<h4>Proveedores</h4><ul><li>Dos pasos con fecha: <b>Registrada</b> y <b>Pagada</b>, al abrir la tarea.</li></ul>'
+      + '<div class="nota">⚠ <b>Fechas cargadas a mano.</b> Siempre se propone la fecha del día. Si se pone otra, la app avisa y deja un comentario automático en la tarea («⚠ Fecha distinta a la del día … cargado el … por …»), para poder auditarlo. Se cuenta la fecha cargada.</div>'
+      + '<h4>A tiempo o fuera de término</h4><ul><li>A tiempo = la fecha de cumplimiento es igual o anterior al vencimiento. En impuestos: presentado y pagado hasta el vto, y registrado hasta vto + 2 hábiles.</li>'
+      + '<li>En las tablas, «tarde» indica que se cumplió fuera de término.</li></ul>')
+    + sec('Plantilla en Excel', '<ol>'
+      + '<li>En ' + ir('fijas', 'Tareas fijas') + ' → <b>Exportar Excel</b>. Trae una hoja «Instrucciones».</li>'
+      + '<li>Cambiar en la hoja «Plantilla»: responsable (mail), tipo (Día / Hábil), día, mes (Siguiente / Mismo), activa (Sí / No), detalle, orden.</li>'
+      + '<li><b>No tocar la columna ID</b> (une cada fila con su tarea). Para una tarea nueva, una fila con el ID vacío.</li>'
+      + '<li><b>Importar Excel</b>: antes de aplicar muestra qué cambia, las nuevas y los errores (las filas con error no se aplican). Recién se aplica al confirmar.</li>'
+      + '<li>Las filas que se borren del Excel <b>no</b> se borran de la plantilla: para dejar de generar una tarea, Activa = No.</li></ol>')
+    + sec('Índice mensual', '<ul>'
+      + '<li>Al cerrar cada mes se guarda una foto: tareas a tiempo, fuera de término, sin cumplir al cierre y con fecha cargada a mano. Esa foto no cambia después.</li>'
+      + '<li>El mes abierto se ve en vivo (marcado con *). Se puede ver total, por lista o por responsable, y exportar a Excel.</li>'
+      + '<li>Antes de cerrar conviene revisar que las fechas de cumplido sean las reales: después quedan en el índice.</li></ul>')
+    + sec('Quién ve y quién hace qué', '<ul>'
+      + '<li>Cada uno ve sus tareas (asignadas, de las que es responsable o que paga). Con el tilde <b>«Tareas · ver todas»</b> en el portal (Usuarios) se ven todas y se hace lo marcado como' + sup + '.</li>'
+      + '<li>Las secciones del menú (Solicitudes de pago, Contabilidad UY, Tareas) se habilitan por persona en el portal → Usuarios.</li></ul>');
+  $main.querySelectorAll('[data-ay-ir]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); TAR.modo = a.dataset.ayIr; tarRender(); window.scrollTo(0, 0); }));
 }
 function tarRenderFijas(tabs){
   const ta = document.getElementById('topActions');
