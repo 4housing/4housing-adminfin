@@ -235,7 +235,7 @@ table.grid td input.tc-in.vacio{border-color:#e0ab3f;background:#fffaf0;}
     <div class="brand-sub">Administración &amp; Finanzas</div>
     <nav id="nav">
       <div class="nav-group-lbl">Finanzas</div>
-      <button class="navbtn active" type="button" data-vista="sol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2.5h9l3 3v16h-12z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span>Solicitudes de pago</span></button>
+      <button class="navbtn active" type="button" data-vista="sol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2.5h9l3 3v16h-12z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span>Compras ↔ Finanzas</span></button>
       <button class="navbtn" type="button" data-vista="cuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4.5h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3z"/><path d="M4 17.5a3 3 0 0 1 3-3h11"/><path d="M8 8.5h6M8 11.5h4"/></svg><span>Contabilidad UY</span></button>
       <button class="navbtn" type="button" data-vista="tar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/></svg><span>Tareas asignadas</span></button>
     </nav>
@@ -254,7 +254,7 @@ table.grid td input.tc-in.vacio{border-color:#e0ab3f;background:#fffaf0;}
   <div class="main">
     <div class="topbar">
       <div>
-        <h1 id="pageTitle">Solicitudes de pago</h1>
+        <h1 id="pageTitle">Compras ↔ Finanzas</h1>
         <div class="sub" id="pageSub">Pedidos de Compras a Finanzas e informes de Tango</div>
       </div>
       <div id="topActions"></div>
@@ -339,7 +339,7 @@ function vistaApp(perfil, cargo, fila){
   $gate.hidden = true; $app.hidden = false;
   document.getElementById('who-nombre').textContent = (perfil.nombre || perfil.email || '') + (cargo ? ' · ' + cargo : '');
   permisosAdminfin(perfil, fila);
-  SP.uid = perfil.id;
+  SP.uid = perfil.id; SP.yo = perfil.email || '';
   // solo las solapas habilitadas en el portal
   document.querySelectorAll('#nav .navbtn').forEach(b => { b.hidden = !puedeVerVista(b.dataset.vista); });
   const pedida = location.hash === '#contabilidad-uy' ? 'cuy' : location.hash === '#tareas' || location.hash === '#impuestos' ? 'tar' : 'sol';
@@ -353,7 +353,7 @@ function vistaApp(perfil, cargo, fila){
 /* ---------- Navegación entre solapas del menú lateral ---------- */
 let VISTA = 'sol';
 const VISTAS = {
-  sol: { titulo:'Solicitudes de pago', sub:'Pedidos de Compras a Finanzas e informes de Tango', hash:'' },
+  sol: { titulo:'Compras ↔ Finanzas', sub:'Pedidos de pago, facturas sin OC e informes de Tango, compartidos con la app de Compras', hash:'' },
   cuy: { titulo:'Contabilidad UY', sub:'Facturas (CFE) recibidas por Avance Oriental SAS · RUT 220754030013 · montos en pesos uruguayos', hash:'#contabilidad-uy' },
   tar: { titulo:'Tareas asignadas', sub:'Tareas fijas (todos los meses) y puntuales: quién asigna a quién, vencimientos, adjuntos y comentarios', hash:'#tareas' },
 };
@@ -1081,7 +1081,7 @@ function tarRenderAyuda(tabs){
       + '<li>Antes de cerrar conviene revisar que las fechas de cumplido sean las reales: después quedan en el índice.</li></ul>')
     + sec('Quién ve y quién hace qué', '<ul>'
       + '<li>Cada uno ve sus tareas (asignadas, de las que es responsable o que paga). Con el tilde <b>«Tareas · ver todas»</b> en el portal (Usuarios) se ven todas y se hace lo marcado como' + sup + '.</li>'
-      + '<li>Las secciones del menú (Solicitudes de pago, Contabilidad UY, Tareas) se habilitan por persona en el portal → Usuarios.</li></ul>');
+      + '<li>Las secciones del menú (Compras ↔ Finanzas, Contabilidad UY, Tareas) se habilitan por persona en el portal → Usuarios.</li></ul>');
   $main.querySelectorAll('[data-ay-ir]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); TAR.modo = a.dataset.ayIr; tarRender(); window.scrollTo(0, 0); }));
 }
 function tarRenderFijas(tabs){
@@ -1510,7 +1510,8 @@ function tarDetalle(id){
    (confirmar lectura, fecha estimada de pago, mensajes). Escritura solo por funciones:
    compras_informe_cargar / compras_pagos_realizar_importar / compras_solpago_adminfin.
    ========================================================================== */
-const SP = { editar:false, tab:'solicitudes', filtro:'Pendiente', lista:[], pend:[], pagos:[], oci:[], prov:{}, meta:[],
+const SP = { editar:false, tab:'solicitudes', filtro:'Pendiente', lista:[], pend:[], pagos:[], oci:[], prov:{}, meta:[], yo:'',
+             fs:[], fsErr:'', fsFiltro:'abiertas', compradores:[],
              q:{}, colf:{}, fecha:{}, sort:{}, actual:null, grupos:[] };
 const FAC_CARGADA = 'FAC cargada';
 // Mismos colores que Compras (ESTADO_CLR de Solicitudes de pago)
@@ -1580,7 +1581,7 @@ async function spCargar(){
       selTodo('compras_solicitudes_pago', '*', 'id'),
       selTodo('compras_pend_facturar', '*', 'id'),
       selTodo('compras_pagos_realizar', '*', 'id'),
-      selTodo('compras_oc_informe', 'oc_numero, proveedor_cod, clasif_cod, remito_numero, comprobante_numero, comprador, fecha_emision', 'id'),
+      selTodo('compras_oc_informe', 'oc_numero, proveedor_cod, clasif_cod, remito_numero, comprobante_numero, comprador, fecha_emision, estado_oc', 'id'),
       selTodo('compras_proveedores', 'codigo, razon, comercial', 'id'),
       selTodo('compras_informes_meta', '*', null),
     ]);
@@ -1588,10 +1589,11 @@ async function spCargar(){
     SP.prov = {}; prov.forEach(p => { SP.prov[String(p.codigo||'').trim().toUpperCase()] = p.razon || p.comercial || ''; });
   } catch (error) {
     if (VISTA !== 'sol') return;
-    $main.innerHTML = '<div class="card"><div class="empty">No pude leer los datos de Solicitudes de pago: ' + esc(error.message)
+    $main.innerHTML = '<div class="card"><div class="empty">No pude leer los datos de Compras ↔ Finanzas: ' + esc(error.message)
       + '<br><span class="muted">Si dice "permission denied", falta correr el SQL de habilitación (sql/2026-10_solpago_carga_adminfin.sql del repo 4housing-compras).</span></div></div>';
     return;
   }
+  await fsCargar();
   SP.cargado = true;
   if (VISTA === 'sol') spRender();
 }
@@ -1600,10 +1602,11 @@ async function spCargar(){
 // Período que cubre el Informe OC cargado (fecha de emisión de las OC): recordatorio de desde qué fecha exportarlo
 // de Tango la próxima vez (cada carga reemplaza la anterior, así que tiene que volver a abarcar todo el período).
 function ociPeriodoNota(){
-  const fs = SP.oci.map(r => String(r.fecha_emision || '').slice(0,10)).filter(f => /^\d{4}-\d{2}-\d{2}$/.test(f)).sort();
+  // Las OC abiertas (Emitida / Autorizada) se guardan aunque sean viejas: el período se mide con las demás
+  const fs = SP.oci.filter(r => !ocAbierta(r.estado_oc)).map(r => String(r.fecha_emision || '').slice(0,10)).filter(f => /^\d{4}-\d{2}-\d{2}$/.test(f)).sort();
   if (!fs.length) return '';
   return '<div style="margin-top:6px"><b>📌 Informe OC:</b> trae OC emitidas del <b>' + fmtFecha(fs[0]) + '</b> al ' + fmtFecha(fs[fs.length - 1])
-    + ' (' + new Set(SP.oci.map(r => r.oc_numero)).size + ' OC). Para actualizarlo, exportalo de Tango <b>desde el ' + fmtFecha(fs[0]) + '</b> hasta hoy: la carga nueva reemplaza a la anterior.</div>';
+    + ', más las que siguen abiertas de antes (' + new Set(SP.oci.map(r => r.oc_numero)).size + ' OC). Para actualizarlo, exportalo de Tango (puede ser completo) y al cargarlo elegí desde qué fecha guardar: la carga nueva reemplaza a la anterior.</div>';
 }
 function metaDe(inf){ return SP.meta.find(m => m.informe === inf) || null; }
 function metaTxt(inf){
@@ -1761,30 +1764,36 @@ function spRenderSol(){
     ? INFORMES.map(([k,l]) => '<button class="btn ghost" data-cargar="' + k + '">' + ICO.upload + 'Cargar ' + esc(l) + '</button>').join('') : '';
   document.querySelectorAll('#topActions [data-cargar]').forEach(b => b.addEventListener('click', () => abrirCarga(b.dataset.cargar)));
   $main.innerHTML =
-      '<div class="mtabs" style="margin:4px 0 14px">' + tab('pendfac','Pendientes de facturar') + tab('solicitudes','Pagos solicitados') + tab('pagos','Pagos a realizar') + tab('ayuda','Instructivo') + '</div>'
+      '<div class="mtabs" style="margin:4px 0 14px">' + tab('pendfac','Pendientes de facturar') + tab('solicitudes','Pagos solicitados') + tab('pagos','Pagos a realizar') + tab('sinoc','Facturas sin OC' + (SP.fs.filter(fsAbierta).length ? ' (' + SP.fs.filter(fsAbierta).length + ')' : '')) + tab('ayuda','Instructivo') + '</div>'
     + '<div class="meta-bar"><strong>Informes de Tango</strong> (los carga Administración y Finanzas; Compras los consulta; cada carga reemplaza la anterior): '
     +   INFORMES.map(([k,l]) => '<span style="white-space:nowrap">' + esc(l) + ': ' + esc(metaTxt(k)) + '</span>').join(' &nbsp;·&nbsp; ')
     +   ociPeriodoNota() + '</div>'
-    + (SP.tab === 'ayuda' ? spGuia() : '<div class="card">' + (SP.tab === 'pendfac' ? vistaPendFac() : SP.tab === 'pagos' ? vistaPagos() : vistaSolicitudes()) + '</div>');
+    + (SP.tab === 'ayuda' ? spGuia() : '<div class="card">' + (SP.tab === 'pendfac' ? vistaPendFac() : SP.tab === 'pagos' ? vistaPagos() : SP.tab === 'sinoc' ? vistaSinOC() : vistaSolicitudes()) + '</div>');
   $main.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { SP.tab = b.dataset.tab; spRender(); }));
   $main.querySelectorAll('[data-sp-ir]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); SP.tab = a.dataset.spIr; spRender(); window.scrollTo(0, 0); }));
   $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
   $main.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); spDetalle(b.dataset.abrir); }));
   $main.querySelectorAll('[data-pdf]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); spVerPdf(a.dataset.pdf); }));
+  $main.querySelectorAll('[data-fs-filtro]').forEach(b => b.addEventListener('click', () => { SP.fsFiltro = b.dataset.fsFiltro; spRender(); }));
+  $main.querySelectorAll('[data-fs-abrir]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); fsDetalle(b.dataset.fsAbrir); }));
+  $main.querySelectorAll('[data-fs-pdf]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); fsVerPdf(b.dataset.fsPdf); }));
+  const fsN = document.getElementById('fs-nueva'); if (fsN) fsN.addEventListener('click', fsNueva);
   tablaEventos();
 }
-// Instructivo de Solicitudes de pago (texto fijo; si cambia el circuito, actualizar acá)
+// Instructivo de Compras ↔ Finanzas (texto fijo; si cambia el circuito, actualizar acá)
 function spGuia(){
   const ir = (t, txt) => '<a href="#" data-sp-ir="' + t + '">' + txt + '</a>';
   return GUIA_CSS
-    + guiaSec('Para qué sirve', 'Es el circuito de pagos con <b>Compras</b>: Compras pide el pago de una factura y Administración y Finanzas lo gestiona. '
-      + 'Las dos apps usan los <b>mismos datos</b>: lo que se confirma o comenta acá, Compras lo ve al instante (y al revés).<ul>'
-      + '<li><b>Compras</b>: adjunta la FAC y pide el pago (queda «Pendiente»); puede cancelar el pedido («Cancelada»).</li>'
-      + '<li><b>Administración y Finanzas</b>: sube los 3 informes de Tango y responde cada pedido: lo pasa a «En gestión», informa fecha estimada, lo marca «Pagada» y deja mensajes.</li></ul>')
+    + guiaSec('Para qué sirve', 'Es el canal entre <b>Compras</b> y <b>Administración y Finanzas</b>. La app de Compras tiene la misma solapa, con el mismo nombre, '
+      + 'y las dos usan los <b>mismos datos</b>: lo que se carga, confirma o comenta acá, Compras lo ve al instante (y al revés).<ul>'
+      + '<li><b>Pedidos de pago</b>: Compras adjunta la FAC y pide el pago; Finanzas lo gestiona (En gestión, fecha estimada, Pagada).</li>'
+      + '<li><b>Facturas sin OC</b>: Finanzas carga una factura que llegó sin orden de compra; Compras informa la OC que generó.</li>'
+      + '<li><b>Informes de Tango</b>: los sube Finanzas; Compras los consulta.</li></ul>')
     + guiaSec('Las pestañas', '<ul>'
       + '<li><b>' + ir('pendfac', 'Pendientes de facturar') + '</b>: las OC de Tango con saldo sin facturar, una fila por OC. La columna «FAC» muestra las facturas que cargó Compras y en qué quedó cada una (clic para abrirla). ⚠ = el neto de la FAC no coincide con lo pendiente de la OC.</li>'
       + '<li><b>' + ir('solicitudes', 'Pagos solicitados') + '</b>: los pedidos de pago (las «FAC cargada» todavía sin pedir no aparecen). Chips por estado; columnas «Pago» y «Fecha de pago» (real o estimada); total al pie en $ y US$ de lo que se ve.</li>'
-      + '<li><b>' + ir('pagos', 'Pagos a realizar') + '</b>: el reporte de Tango, completado con Auxiliar, OC, Remito y Comprador del Informe OC (cruzado por proveedor + N° de comprobante). «Pago» indica el estado del pedido o «Sin pedir». Total al pie.</li></ul>'
+      + '<li><b>' + ir('pagos', 'Pagos a realizar') + '</b>: el reporte de Tango (con su fecha de vencimiento), completado con Auxiliar, OC, Remito y Comprador del Informe OC (cruzado por proveedor + N° de comprobante). «Pago» indica el estado del pedido o «Sin pedir». Total al pie.</li>'
+      + '<li><b>' + ir('sinoc', 'Facturas sin OC') + '</b>: las facturas que llegaron sin orden de compra y en qué quedó cada una. El número en la pestaña son las que siguen sin cerrar.</li></ul>'
       + 'En todas: buscador, filtro ▾ por columna (tipo Excel; en fechas, rango Desde / Hasta), clic en el título para ordenar, ancho de columnas ajustable («Auto-ajustar columnas» lo vuelve al original) y «Limpiar filtros».'
       + '<div class="nota">Pagos comprometidos para un día o hasta una fecha: en Pagos solicitados, filtro ▾ de «Fecha de pago» (para un día, Desde = Hasta). El total al pie suma lo filtrado.</div>')
     + guiaSec('Cargar los informes de Tango', '<ol>'
@@ -1792,8 +1801,8 @@ function spGuia(){
       + '<li>Arriba a la derecha: «Cargar Informe OC», «Cargar Pendientes de facturar» o «Cargar Pagos a realizar».</li>'
       + '<li>Poner la <b>fecha del reporte</b> (viene la de hoy) y elegir el archivo → «Cargar».</li></ol>'
       + '<ul><li>Cada carga <b>reemplaza</b> la anterior. Arriba de las pestañas queda la constancia de cada informe: fecha del reporte, cuándo y quién lo subió.</li>'
-      + '<li>La app busca la hoja que tenga las columnas del informe — Informe OC: «NRO ORDEN COMPRA» y «COD CLASIFICACIÓN»; Pendientes de facturar: «Nro. Orden de Compra» y «Pendiente de facturar sin impuestos»; Pagos a realizar: «Nro. Comprobante» y «Total Pendiente (CTE)». Si no la encuentra, avisa.</li>'
-      + '<li><b>Informe OC</b>: la nota 📌 de arriba indica desde qué fecha exportarlo para actualizarlo. Si la carga se corta a mitad, volver a cargar el archivo completo.</li>'
+      + '<li>La app busca la hoja que tenga las columnas del informe — Informe OC: «NRO ORDEN COMPRA» y «COD CLASIFICACIÓN»; Pendientes de facturar: «Nro. Orden de Compra» y «Pendiente de facturar sin impuestos»; Pagos a realizar: «Nro. Comprobante» y «Total Pendiente (CTE)» (no importan mayúsculas ni acentos). Si no la encuentra, avisa.</li>'
+      + '<li><b>Informe OC</b>: se puede exportar <b>completo</b> (desde 2016 pesa unos 7 MB y tarda unos segundos en leerse). Al cargarlo se elige <b>«Guardar OC emitidas desde»</b> (viene el 1° de enero del año anterior): se guardan las OC desde esa fecha <b>más las que siguen abiertas</b> (Emitida / Autorizada) aunque sean anteriores. La fecha tiene que cubrir las OC de las facturas que siguen en Pagos a realizar. Exportarlo de Tango ya filtrado desde una fecha también sirve y es más liviano. Si la carga se corta a mitad, volver a cargar el archivo completo.</li>'
       + '<li><b>Pagos a realizar</b>: si una factura con pedido de pago ya no figura en el reporte, se marca «⚠ fuera del informe» y se le agrega un comentario («se estima pagada, anulada u otro motivo»). <b>El estado no cambia</b>: lo sigue informando Administración.</li></ul>')
     + guiaSec('Gestionar un pedido de pago', 'En Pagos solicitados → «Abrir». Se ve el detalle, el PDF de la factura y el historial. Según el estado:'
       + '<table><tr><th>Estado</th><th>Qué se puede hacer</th></tr>'
@@ -1803,12 +1812,25 @@ function spGuia(){
       + '<tr><td><span class="badge b-rojo">Cancelada</span></td><td>La canceló Compras (no quiere decir que no se haya pagado): se puede marcar Pagada o dejar un mensaje.</td></tr>'
       + '<tr><td><span class="badge b-gris">FAC cargada</span></td><td>Compras cargó la factura pero todavía no pidió el pago: no hay acciones.</td></tr></table>'
       + 'Todo queda en el historial con usuario, fecha y hora, y Compras lo ve al instante.')
+    + guiaSec('Facturas sin OC', '<ol>'
+      + '<li>En ' + ir('sinoc', 'Facturas sin OC') + ' → «+ Nueva factura sin OC»: proveedor (código Tango), N° de factura, fecha, moneda, monto, el PDF y un comentario si hace falta.</li>'
+      + '<li><b>Asignar a</b>: si se sabe de quién es, elegir el comprador; si no, dejar «Compras (sin asignar)» y la toma alguien de Compras. Después se puede reasignar desde «Abrir».</li>'
+      + '<li>Compras, desde su app, <b>informa la OC</b> que generó (y si quiere tilda «incluir en solicitar pago», que además arma el pedido de pago), o responde <b>«No corresponde»</b> con el motivo.</li>'
+      + '<li>Finanzas revisa la OC (la app marca si está en el Informe OC y si es del mismo proveedor) y la <b>cierra</b> con «Cerrar factura» cuando queda procesada. Si hubo un error, se puede reabrir con motivo.</li></ol>'
+      + '<table><tr><th>Estado</th><th>Qué quiere decir</th></tr>'
+      + '<tr><td>' + fsBadge('Sin asignar') + '</td><td>En la bandeja común de Compras: la puede tomar cualquier comprador.</td></tr>'
+      + '<tr><td>' + fsBadge('Asignada') + '</td><td>Tiene un comprador a cargo; falta que informe la OC.</td></tr>'
+      + '<tr><td>' + fsBadge('OC informada') + '</td><td>Compras informó la OC. Falta que Finanzas la procese y la cierre.</td></tr>'
+      + '<tr><td>' + fsBadge('No corresponde') + '</td><td>Compras dice que no es suya (ver el motivo en el historial). Finanzas la reasigna o la cierra.</td></tr>'
+      + '<tr><td>' + fsBadge('Cerrada') + '</td><td>Terminada.</td></tr></table>'
+      + '<div class="nota">«Eliminar» (en el detalle) solo aparece mientras no tiene OC informada: es para una factura cargada por error.</div>')
     + guiaSec('Avisos que pueden aparecer', '<ul>'
       + '<li><b>⚠ fuera del informe dd/mm</b>: la factura ya no figura en Pagos a realizar (se estima pagada, anulada u otro motivo). Conviene confirmar y, si corresponde, marcarla Pagada.</li>'
       + '<li><b>✓ leída por Adm.</b>: Administración ya tomó el pedido.</li>'
       + '<li><b>⚠ en la columna FAC</b>: el neto de la factura no coincide con lo pendiente de la OC.</li>'
-      + '<li>En Pagos a realizar, «—» en Auxiliar / OC / Remito: la factura no está en el Informe OC (factura sin OC o Informe OC desactualizado).</li></ul>')
-    + guiaSec('Quién puede hacer qué', 'Se define en el portal → Usuarios, sección «Solicitudes de pago». Con «Editar» se ven los botones de carga de informes y las acciones de cada pedido; con «Ver» (o cargo lector) solo se consulta: abrir el detalle, ver el PDF y filtrar. Dirección ve y edita todo.');
+      + '<li>En Pagos a realizar, «—» en Auxiliar / OC / Remito: la factura no está en el Informe OC (factura sin OC o Informe OC desactualizado).</li>'
+      + '<li>En Facturas sin OC, debajo de la OC: «✓ en el Informe OC», «no está en el Informe OC» (puede ser una OC nueva, todavía no exportada) o «⚠ OC de otro proveedor».</li></ul>')
+    + guiaSec('Quién puede hacer qué', 'Se define en el portal → Usuarios, en la sección de esta solapa (la que antes se llamaba «Solicitudes de pago»). Con «Editar» se ven los botones de carga de informes, el alta de facturas sin OC y las acciones de cada pedido o factura; con «Ver» (o cargo lector) solo se consulta: abrir el detalle, ver el PDF y filtrar. Dirección ve y edita todo.');
 }
 // Encabezado de card igual que Compras: título + texto explicativo en gris
 function cardH(titulo, meta){ return '<div class="card-h"><h3>' + esc(titulo) + '</h3><span class="meta">' + meta + '</span></div>'; }
@@ -1906,6 +1928,7 @@ function vistaPagos(){
   const cols = [
     { id:'sol', t:'Pago', v:r => { const s = solDe(r); return s ? (s.estado || 'Pendiente') : 'Sin pedir'; },
       td:r => { const s = solDe(r); return s ? '<a href="#" data-abrir="' + s.id + '">' + badge(s.estado || 'Pendiente') + '</a>' : '<span class="muted">Sin pedir</span>'; } },
+    { id:'fv', t:'Vencimiento', fecha:r => r.fecha_vencimiento, td:r => r.fecha_vencimiento ? fmtFecha(r.fecha_vencimiento) : '<span class="muted">—</span>' },
     { id:'fe', t:'Fecha de emisión', fecha:r => r.fecha_emision, td:r => fmtFecha(r.fecha_emision) },
     { id:'fc', t:'Fecha contable', v:r => r.fecha_contable ? String(r.fecha_contable).slice(0,7) : '(sin fecha)', td:r => fmtFecha(r.fecha_contable) },
     { id:'tipo', t:'Tipo de comprobante', v:r => r.tipo_comprobante || '(sin tipo)', td:r => esc(r.tipo_comprobante || '') },
@@ -1925,9 +1948,188 @@ function vistaPagos(){
   const total = visibles.reduce((a,r) => a + (+r.total_pend_cte||0), 0);
   const aviso = !SP.oci.length ? '<div class="err" style="padding:10px 14px 0">No hay Informe OC cargado: no se pueden completar Auxiliar / OC / Remito.</div>'
     : (sinMatch ? '<div class="muted" style="padding:10px 14px 0;font-size:11.5px">' + sinMatch + ' de ' + rows.length + ' facturas no aparecen en el Informe OC (por ejemplo, facturas sin OC, o un Informe OC desactualizado): quedan con "—".</div>' : '');
-  const pie = '<tfoot><tr><td colspan="6" class="num"><b>Total (' + visibles.length + (visibles.length !== rows.length ? ' de ' + rows.length : '') + ')</b></td><td class="num"><b>' + fmtNum(total) + '</b></td><td colspan="4"></td></tr></tfoot>';
+  const pie = '<tfoot><tr><td colspan="7" class="num"><b>Total (' + visibles.length + (visibles.length !== rows.length ? ' de ' + rows.length : '') + ')</b></td><td class="num"><b>' + fmtNum(total) + '</b></td><td colspan="4"></td></tr></tfoot>';
   return head + aviso + tablaHerramientas('pagos', 'Buscar proveedor, comprobante, auxiliar, OC, remito o comprador…')
     + (visibles.length ? tablaHtml('pagos', cols, visibles, pie) : '<div class="empty">Ninguna factura coincide con los filtros.</div>');
+}
+
+/* ---------- Pestaña: Facturas sin OC ----------
+   Tabla compras_facturas_sin_oc (sql/2026-10_facturas_sin_oc.sql del repo 4housing-compras), la misma que ve Compras.
+   Finanzas carga la factura (con el PDF) y la asigna a un comprador o la deja "Sin asignar" (bandeja común de Compras);
+   Compras informa la OC que generó (o "No corresponde"); Finanzas la cierra. Todo queda en el historial. */
+const FS_T = 'compras_facturas_sin_oc';
+const FS_ESTADOS = ['Sin asignar', 'Asignada', 'OC informada', 'No corresponde', 'Cerrada'];
+const FS_BADGE = { 'Sin asignar':'b-ambar', 'Asignada':'b-azul', 'OC informada':'b-verde', 'No corresponde':'b-rojo', 'Cerrada':'b-gris' };
+const fsBadge = e => '<span class="badge ' + (FS_BADGE[e] || '') + '">' + esc(e) + '</span>';
+const fsAbierta = f => f.estado !== 'Cerrada';
+// OC abierta en Tango (se guarda siempre al cargar el Informe OC, aunque sea vieja)
+const ocAbierta = e => !/ANULADA|CERRADA|CUMPLIDA|DESAUTORIZADA/i.test(String(e || ''));
+async function fsCargar(){
+  try { SP.fs = (await selTodo(FS_T, '*', 'id')).reverse(); SP.fsErr = ''; }
+  catch (e) { SP.fs = []; SP.fsErr = e.message || String(e); }
+  const { data, error } = await sb.rpc('compras_compradores');
+  SP.compradores = error ? [] : (data || []).map(x => x.nombre);
+}
+// La OC informada, contra el Informe OC cargado: ¿existe? ¿es del mismo proveedor?
+function fsOcIdx(){ const m = {}; SP.oci.forEach(r => { const k = nroOC(r.oc_numero); (m[k] = m[k] || new Set()).add(String(r.proveedor_cod || '').trim().toUpperCase()); }); return m; }
+function fsOcAviso(f, idx){
+  const p = idx[nroOC(f.oc_numero)];
+  if (!p) return '<div class="muted" title="Puede ser una OC nueva que todavía no está en el Informe OC cargado">no está en el Informe OC</div>';
+  if (f.proveedor_cod && !p.has(String(f.proveedor_cod).trim().toUpperCase())) return '<div style="color:#b3853a">⚠ OC de otro proveedor (' + esc([...p].join(', ')) + ')</div>';
+  return '<div class="muted">✓ en el Informe OC</div>';
+}
+function vistaSinOC(){
+  const head = cardH('Facturas sin OC', 'Facturas que llegaron a Finanzas sin orden de compra. Se asignan a un comprador, o quedan «Sin asignar» para que las tome alguien de Compras; Compras informa la OC que generó y Finanzas la cierra. Compras lo ve al instante.');
+  if (SP.fsErr) return head + '<div class="empty">No pude leer las facturas sin OC: ' + esc(SP.fsErr) + '<br><span class="muted">Falta correr sql/2026-10_facturas_sin_oc.sql (repo 4housing-compras) en Supabase.</span></div>';
+  const cuenta = e => SP.fs.filter(f => f.estado === e).length;
+  const chips = [['abiertas', 'Sin cerrar (' + SP.fs.filter(fsAbierta).length + ')'], ...FS_ESTADOS.map(e => [e, e + ' (' + cuenta(e) + ')']), ['todas', 'Todas (' + SP.fs.length + ')']]
+    .map(([v,l]) => '<button class="mtab' + (SP.fsFiltro === v ? ' active' : '') + '" data-fs-filtro="' + esc(v) + '">' + esc(l) + '</button>').join('')
+    + (SP.editar ? '<span style="margin-left:auto"></span><button class="btn sm" id="fs-nueva">+ Nueva factura sin OC</button>' : '');
+  const base = SP.fs.filter(f => SP.fsFiltro === 'todas' || (SP.fsFiltro === 'abiertas' ? fsAbierta(f) : f.estado === SP.fsFiltro));
+  const idx = fsOcIdx();
+  const cols = [
+    { id:'fac', t:'Factura', v:f => f.nro_factura || '', td:f => '<strong>' + esc(f.nro_factura || '—') + '</strong>' + (f.adjunto_path ? ' <button class="iconbtn" title="Ver factura" data-fs-pdf="' + f.id + '">' + ICO.pdf + '</button>' : '') },
+    { id:'prov', t:'Proveedor', v:f => f.proveedor_cod || '(sin proveedor)', td:f => esc(f.proveedor_cod || '') + ' ' + esc(f.proveedor || provNombre(f.proveedor_cod)) },
+    { id:'ff', t:'Fecha factura', fecha:f => f.fecha_factura, td:f => f.fecha_factura ? fmtFecha(f.fecha_factura) : '<span class="muted">—</span>' },
+    { id:'mon', t:'Monto', v:f => f.moneda === 'USD' ? 'Dólares' : 'Pesos', s:f => +f.monto || 0, cls:'num', td:f => fmtMonto(f.monto, f.moneda) },
+    { id:'comp', t:'Asignada a', v:f => f.comprador || 'Sin asignar', td:f => f.comprador ? esc(f.comprador) : '<span class="muted">Compras (sin asignar)</span>' },
+    { id:'est', t:'Estado', v:f => f.estado, td:f => fsBadge(f.estado) },
+    { id:'oc', t:'OC', v:f => f.oc_numero ? nroOC(f.oc_numero) : '(sin OC)', td:f => f.oc_numero ? '<strong>' + esc(nroOC(f.oc_numero)) + '</strong>' + fsOcAviso(f, idx) : '<span class="muted">—</span>' },
+    { id:'pp', t:'Pedido de pago', v:f => f.pedir_pago ? 'Sí' : 'No', td:f => f.pedir_pago ? 'Sí' : '<span class="muted">—</span>' },
+    { id:'alta', t:'Cargada', fecha:f => String(f.creado_en || '').slice(0,10), td:f => '<span style="white-space:nowrap">' + fmtFecha(String(f.creado_en || '').slice(0,10)) + '</span>' },
+    { id:'ult', t:'Último comentario', v:null, s:f => { const h = f.historial || []; return h.length ? String(h[h.length-1].fecha || '') : ''; },
+      td:f => { const h = f.historial || []; const u = h.length ? h[h.length-1] : null; return u ? esc(u.texto || '') + '<div class="muted">' + cuando(u) + '</div>' : '—'; } },
+    { id:'acc', t:'', v:null, td:f => '<button class="btn ghost sm" data-fs-abrir="' + f.id + '">Abrir</button>' },
+  ];
+  TABLAS.sinoc = { cols, base:() => base };
+  const filas = tablaFiltrar('sinoc', cols, base, f => [f.nro_factura, f.proveedor_cod, f.proveedor, provNombre(f.proveedor_cod), f.comprador, nroOC(f.oc_numero)].join(' '));
+  const tot = { ARS:0, USD:0 }; filas.forEach(x => { tot[x.moneda === 'USD' ? 'USD' : 'ARS'] += (+x.monto || 0); });
+  const iMon = cols.findIndex(c => c.id === 'mon');
+  const pie = '<tfoot><tr><td colspan="' + iMon + '" class="num"><b>Total (' + filas.length + (filas.length !== base.length ? ' de ' + base.length : '') + ')</b></td>'
+    + '<td class="num"><b>' + fmtMonto(tot.ARS, 'ARS') + '</b>' + (tot.USD ? '<div><b>' + fmtMonto(tot.USD, 'USD') + '</b></div>' : '') + '</td><td colspan="' + (cols.length - iMon - 1) + '"></td></tr></tfoot>';
+  return head + '<div class="chips" style="align-items:center">' + chips + '</div>' + tablaHerramientas('sinoc', 'Buscar factura, proveedor, comprador u OC…')
+    + (filas.length ? tablaHtml('sinoc', cols, filas, pie) : '<div class="empty">No hay facturas sin OC' + (tablaHayFiltros('sinoc') || SP.q.sinoc ? ' que coincidan con los filtros' : (SP.fsFiltro !== 'todas' ? ' en este estado' : '')) + '.</div>');
+}
+const fsOpcComp = sel => '<option value="">Compras (sin asignar)</option>' + SP.compradores.map(n => '<option value="' + esc(n) + '"' + (n === sel ? ' selected' : '') + '>' + esc(n) + '</option>').join('')
+  + (sel && !SP.compradores.includes(sel) ? '<option value="' + esc(sel) + '" selected>' + esc(sel) + '</option>' : '');
+function fsNueva(){
+  if (!SP.editar) return;
+  const provs = Object.keys(SP.prov).sort().map(c => '<option value="' + esc(c) + '">' + esc(SP.prov[c]) + '</option>').join('');
+  abrirModal('Nueva factura sin OC',
+    '<p style="margin:0 0 14px;font-size:12.5px;color:#5f5c52;line-height:1.5">Para que Compras genere la OC. Si sabés de quién es, asignala a ese comprador; si no, dejala en «Compras (sin asignar)» y la toma alguien de Compras. Compras la ve al instante.</p>'
+    + '<div class="frow c2"><div class="field"><label>Proveedor (código Tango) *</label><input id="fs-prov" list="fs-dl-prov" placeholder="Escribí el código o el nombre…" autocomplete="off"><datalist id="fs-dl-prov">' + provs + '</datalist><div class="muted" id="fs-prov-n" style="font-size:11.5px;margin-top:3px"></div></div>'
+    + '<div class="field"><label>N° de factura *</label><input id="fs-nro" placeholder="Ej. A0000700005352"></div></div>'
+    + '<div class="frow c3"><div class="field"><label>Fecha de la factura</label><input type="date" id="fs-fecha"></div>'
+    + '<div class="field"><label>Moneda</label><select id="fs-mon"><option value="ARS">Pesos</option><option value="USD">Dólares</option></select></div>'
+    + '<div class="field"><label>Monto</label><input type="number" step="0.01" id="fs-monto"></div></div>'
+    + '<div class="frow c2"><div class="field"><label>Asignar a</label><select id="fs-comp">' + fsOpcComp('') + '</select></div>'
+    + '<div class="field"><label>Factura (PDF)</label><input type="file" id="fs-file" accept="application/pdf,image/*"></div></div>'
+    + '<div class="field"><label>Comentario para Compras (opcional)</label><textarea id="fs-com" rows="2" placeholder="Ej. creemos que es de la obra X…"></textarea></div>'
+    + '<div class="err" id="fs-err"></div>',
+    '<button class="btn ghost" id="fs-cancelar">Cancelar</button><button class="btn" id="fs-ok">Guardar</button>', 'wide');
+  const pv = document.getElementById('fs-prov');
+  pv.addEventListener('input', () => { const c = pv.value.trim().toUpperCase(); document.getElementById('fs-prov-n').textContent = !c ? '' : (provNombre(c) || 'No está en el diccionario de proveedores de Compras (se guarda igual).'); });
+  document.getElementById('fs-cancelar').addEventListener('click', cerrarModal);
+  document.getElementById('fs-ok').addEventListener('click', fsGuardarNueva);
+}
+async function fsGuardarNueva(){
+  const $ = id => document.getElementById(id), err = $('fs-err'), btn = $('fs-ok'); err.textContent = '';
+  const prov = $('fs-prov').value.trim().toUpperCase(), nro = $('fs-nro').value.trim();
+  if (!prov) { err.textContent = 'Poné el proveedor.'; return; }
+  if (!nro) { err.textContent = 'Poné el N° de factura.'; return; }
+  if (SP.fs.some(f => fsAbierta(f) && claveFac(f.proveedor_cod, f.nro_factura) === claveFac(prov, nro))) { err.textContent = 'Esa factura de ese proveedor ya está cargada y sin cerrar.'; return; }
+  const comp = $('fs-comp').value, com = $('fs-com').value.trim(), f = ($('fs-file').files || [])[0], estado = comp ? 'Asignada' : 'Sin asignar';
+  btn.disabled = true;
+  let path = null;
+  try {
+    if (f) {
+      path = 'sin-oc/' + Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const up = await sb.storage.from('facturas').upload(path, f, { upsert:false });
+      if (up.error) { path = null; throw new Error('No pude subir el PDF: ' + up.error.message); }
+    }
+    const h = { fecha:new Date().toISOString(), autor:SP.yo, estado_nuevo:estado,
+                texto:'Cargó la factura sin OC' + (comp ? ' y la asignó a ' + comp : ' (sin asignar: para que la tome Compras)') + '.' + (com ? ' ' + com : '') };
+    const { error } = await sb.from(FS_T).insert({ proveedor_cod:prov, proveedor:provNombre(prov) || null, nro_factura:nro, fecha_factura:$('fs-fecha').value || null,
+      moneda:$('fs-mon').value, monto:$('fs-monto').value === '' ? null : +$('fs-monto').value, adjunto_path:path, adjunto_nombre:f ? f.name : null,
+      comprador:comp || null, estado, historial:[h], creado_por:SP.yo });
+    if (error) throw new Error(error.message);
+    cerrarModal(); toast('Factura sin OC cargada'); SP.fsFiltro = 'abiertas'; await fsCargar(); spRender();
+  } catch (e) {
+    if (path) await sb.storage.from('facturas').remove([path]);
+    err.textContent = 'Error: ' + (e.message || e); btn.disabled = false;
+  }
+}
+async function fsVerPdf(id){
+  const f = SP.fs.find(x => String(x.id) === String(id)); if (!f || !f.adjunto_path) return;
+  const w = window.open('', '_blank');
+  const { data, error } = await sb.storage.from('facturas').createSignedUrl(f.adjunto_path, 3600);
+  if (error || !data) { if (w) w.close(); toast('No pude abrir el PDF: ' + ((error && error.message) || 'sin permiso')); return; }
+  if (w) w.location = data.signedUrl; else window.location = data.signedUrl;
+}
+// Cambio + renglón de historial. Relee el historial justo antes, para no pisar lo que haya escrito Compras.
+async function fsActualizar(id, cambios, texto){
+  const err = document.getElementById('fs-ac-err'); if (err) err.textContent = '';
+  const { data:act, error:e1 } = await sb.from(FS_T).select('historial').eq('id', id).single();
+  if (e1) { if (err) err.textContent = 'Error: ' + e1.message; return; }
+  const h = { fecha:new Date().toISOString(), autor:SP.yo, texto }; if (cambios.estado) h.estado_nuevo = cambios.estado;
+  const { data, error } = await sb.from(FS_T).update(Object.assign({}, cambios, { historial:(act.historial || []).concat([h]), actualizado_en:new Date().toISOString() }))
+    .eq('id', id).select().single();
+  if (error) { if (err) err.textContent = 'Error: ' + error.message; return; }
+  const i = SP.fs.findIndex(x => String(x.id) === String(id)); if (i >= 0) SP.fs[i] = data;
+  toast('Listo'); spRender(); fsDetalle(id);
+}
+function fsDetalle(id){
+  const f = SP.fs.find(x => String(x.id) === String(id)); if (!f) return;
+  const hist = (f.historial || []).slice().reverse().map(h =>
+    '<div class="it">' + esc(h.texto || '') + '<div class="muted" style="margin-top:2px">' + cuando(h) + (h.estado_nuevo ? ' · pasó a "' + esc(h.estado_nuevo) + '"' : '') + '</div></div>').join('') || '<div class="muted" style="font-size:12.5px;padding:8px 0">Sin comentarios todavía.</div>';
+  const sol = f.solicitud_pago_id ? SP.lista.find(x => String(x.id) === String(f.solicitud_pago_id)) : null;
+  const borrable = !f.oc_numero && ['Sin asignar', 'Asignada', 'No corresponde'].includes(f.estado);
+  let acciones = '';
+  if (SP.editar && fsAbierta(f)) {
+    acciones += '<div class="box"><h4>Asignar</h4><div class="frow c2"><div class="field"><label>Comprador</label><select id="fs-ac-comp">' + fsOpcComp(f.comprador || '') + '</select></div>'
+      + '<div class="field"><label>Mensaje (opcional)</label><input type="text" id="fs-ac-comp-msg" placeholder="Ej. es de la obra X"></div></div><div class="row"><button class="btn ghost sm" id="fs-ac-asig">Asignar</button></div></div>'
+      + '<div class="box"><h4>Cerrar la factura</h4><div class="muted" style="font-size:12px">' + (f.estado === 'OC informada' ? 'Compras ya informó la OC: cerrala cuando la factura quede procesada.' : 'Si se resolvió de otra forma (por ejemplo, no correspondía a Compras).') + '</div>'
+      + '<div class="field"><label>Comentario (opcional)</label><input type="text" id="fs-ac-cerrar-msg"></div><div class="row"><button class="btn sm" id="fs-ac-cerrar">Cerrar factura</button></div></div>';
+  } else if (SP.editar) {
+    acciones += '<div class="box"><h4>Reabrir</h4><div class="field"><label>Motivo *</label><input type="text" id="fs-ac-reab-msg" placeholder="Ej. la OC informada no corresponde"></div><div class="row"><button class="btn ghost sm" id="fs-ac-reab">Reabrir</button></div></div>';
+  }
+  if (SP.editar) acciones += '<div class="box"><h4>Dejar un mensaje</h4><div class="field"><textarea id="fs-ac-com" rows="2" placeholder="Mensaje para Compras…"></textarea></div><div class="row"><button class="btn ghost sm" id="fs-ac-com-ok">Enviar</button></div></div>';
+  abrirModal('Factura sin OC · ' + (f.nro_factura || ''),
+    '<div class="kv">'
+    + '<b>Proveedor:</b> ' + esc(f.proveedor_cod || '') + ' — ' + esc(f.proveedor || provNombre(f.proveedor_cod)) + '<br>'
+    + '<b>Factura:</b> ' + esc(f.nro_factura || '—') + (f.adjunto_path ? ' · <a href="#" class="lnk" id="fs-dt-pdf">ver PDF</a>' : '') + (f.fecha_factura ? ' · del ' + fmtFecha(f.fecha_factura) : '') + '<br>'
+    + '<b>Monto:</b> ' + fmtMonto(f.monto, f.moneda) + '<br>'
+    + '<b>Asignada a:</b> ' + (f.comprador ? esc(f.comprador) : 'Compras (sin asignar)') + '<br>'
+    + '<b>Estado:</b> ' + fsBadge(f.estado)
+    + (f.oc_numero ? '<br><b>OC:</b> ' + esc(nroOC(f.oc_numero)) + (f.oc_informada_por ? ' · informada por ' + esc(f.oc_informada_por) + (f.oc_informada_en ? ' el ' + fmtFecha(String(f.oc_informada_en).slice(0,10)) : '') : '') + fsOcAviso(f, fsOcIdx()) : '')
+    + (f.pedir_pago ? '<br><b>Pedido de pago:</b> Compras también pidió el pago' + (sol ? ' · <a href="#" class="lnk" id="fs-dt-sol">ver en Pagos solicitados</a>' : '') : '')
+    + '<br><span class="muted">Cargada por ' + esc(f.creado_por || '—') + ' el ' + fmtFecha(String(f.creado_en || '').slice(0,10)) + '</span>'
+    + '</div>' + acciones + '<div class="err" id="fs-ac-err"></div>'
+    + '<div style="font-weight:700;font-size:12.5px;margin-top:14px;margin-bottom:4px">Historial</div><div class="hist">' + hist + '</div>',
+    (SP.editar && borrable ? '<button class="btn ghost" style="color:#b3261e;margin-right:auto" id="fs-dt-del">Eliminar</button>' : '') + '<button class="btn ghost" id="fs-dt-cerrar">Cerrar</button>', 'wide');
+  const $ = x => document.getElementById(x), on = (x, fn) => { const el = $(x); if (el) el.addEventListener('click', fn); };
+  on('fs-dt-cerrar', cerrarModal);
+  on('fs-dt-pdf', e => { e.preventDefault(); fsVerPdf(f.id); });
+  on('fs-dt-sol', e => { e.preventDefault(); spDetalle(sol.id); });
+  on('fs-ac-asig', () => {
+    const c = $('fs-ac-comp').value, m = $('fs-ac-comp-msg').value.trim();
+    if (c === (f.comprador || '')) { $('fs-ac-err').textContent = 'Ya está asignada así.'; return; }
+    fsActualizar(f.id, { comprador:c || null, estado:f.estado === 'OC informada' ? 'OC informada' : (c ? 'Asignada' : 'Sin asignar') },
+      (c ? 'La asignó a ' + c + '.' : 'La dejó sin asignar (para que la tome Compras).') + (m ? ' ' + m : ''));
+  });
+  on('fs-ac-cerrar', () => { const m = $('fs-ac-cerrar-msg').value.trim(); fsActualizar(f.id, { estado:'Cerrada' }, 'Cerró la factura.' + (m ? ' ' + m : '')); });
+  on('fs-ac-reab', () => {
+    const m = $('fs-ac-reab-msg').value.trim(); if (!m) { $('fs-ac-err').textContent = 'Escribí el motivo.'; return; }
+    fsActualizar(f.id, { estado:f.oc_numero ? 'OC informada' : (f.comprador ? 'Asignada' : 'Sin asignar') }, 'La reabrió. Motivo: ' + m);
+  });
+  on('fs-ac-com-ok', () => { const m = $('fs-ac-com').value.trim(); if (!m) { $('fs-ac-err').textContent = 'Escribí el mensaje.'; return; } fsActualizar(f.id, {}, m); });
+  on('fs-dt-del', async () => {
+    if (!confirm('¿Eliminar la factura ' + (f.nro_factura || '') + ' y su historial? No se puede deshacer.')) return;
+    const { error } = await sb.from(FS_T).delete().eq('id', f.id);
+    if (error) { $('fs-ac-err').textContent = 'Error: ' + error.message; return; }
+    if (f.adjunto_path) await sb.storage.from('facturas').remove([f.adjunto_path]);
+    cerrarModal(); toast('Factura eliminada'); await fsCargar(); spRender();
+  });
 }
 
 /* ---------- Detalle de una solicitud ---------- */
@@ -2080,11 +2282,11 @@ const CARGAS = {
     filas(rows){
       const H = rows[0], c = (...n) => _xIdx(H, ...n), g = (r,i) => i>=0 ? r[i] : '';
       const ix = { fe:c('Fecha de emisión','Fecha de emision'), fc:c('Fecha contable'), tipo:c('Tipo de comprobante'), prov:c('Cód. proveedor','Cod. proveedor'),
-        nro:c('Nro. Comprobante'), cte:c('Total Pendiente (CTE)'), ext:c('Total Pendiente (EXT)') };
+        nro:c('Nro. Comprobante'), cte:c('Total Pendiente (CTE)'), ext:c('Total Pendiente (EXT)'), fv:c('Fecha de vencimiento') };
       const out = [];
       for (let k=1; k<rows.length; k++) {
         const r = rows[k], nro = _xNorm(g(r,ix.nro)); if (!nro) continue;   // la última fila de Tango es el total
-        out.push({ fecha_emision:_xFecha(g(r,ix.fe)), fecha_contable:_xFecha(g(r,ix.fc)), tipo_comprobante:_xNorm(g(r,ix.tipo)),
+        out.push({ fecha_vencimiento:_xFecha(g(r,ix.fv)), fecha_emision:_xFecha(g(r,ix.fe)), fecha_contable:_xFecha(g(r,ix.fc)), tipo_comprobante:_xNorm(g(r,ix.tipo)),
           proveedor_cod:_xNorm(g(r,ix.prov)), comprobante_numero:nro, total_pend_cte:_xNum(g(r,ix.cte)), total_pend_ext:_xNum(g(r,ix.ext)) });
       }
       return out;
@@ -2095,9 +2297,12 @@ function abrirCarga(inf){
   const C = CARGAS[inf]; if (!C || !SP.editar) return;
   abrirModal('Cargar ' + C.titulo,
     '<p style="margin:0 0 14px;font-size:12.5px;color:#5f5c52;line-height:1.5">Subí el Excel de Tango "' + esc(C.titulo) + '". Reemplaza lo cargado antes; Compras lo ve al instante.'
+    + (inf === 'oc_informe' ? ' El informe de Tango puede venir completo: se guardan las OC emitidas desde la fecha que elijas, más las que siguen abiertas (Emitida / Autorizada) aunque sean anteriores.' : '')
     + (inf === 'pagos_realizar' ? ' Si una factura con pedido de pago ya no figura, se le agrega un comentario ("se estima pagada, anulada u otro motivo") y una marca; el estado no cambia: lo sigue informando Administración.' : '') + '</p>'
     + '<div class="frow c2"><div class="field"><label>Fecha del reporte *</label><input type="date" id="imp-fecha" value="' + hoyISO() + '"></div>'
     + '<div class="field"><label>Archivo (.xlsx) *</label><input type="file" id="imp-file" accept=".xlsx,.xls"></div></div>'
+    + (inf === 'oc_informe' ? '<div class="frow c2"><div class="field"><label>Guardar OC emitidas desde *</label><input type="date" id="imp-desde" value="' + (new Date().getFullYear() - 1) + '-01-01"></div>'
+      + '<div class="field"><label>&nbsp;</label><div class="muted" style="font-size:11.5px;padding-top:4px">Tiene que cubrir las OC de las facturas que siguen en Pagos a realizar.</div></div></div>' : '')
     + '<div class="err" id="imp-err"></div><div class="okmsg" id="imp-ok"></div>',
     '<button class="btn ghost" id="imp-cerrar">Cerrar</button><button class="btn" id="imp-ok-btn">Cargar</button>');
   document.getElementById('imp-cerrar').addEventListener('click', cerrarModal);
@@ -2120,8 +2325,16 @@ async function cargarInforme(inf){
       if (rr.length && C.test(rr[0].map(_xNorm))) { rows = rr; break; }
     }
     if (!rows) throw new Error('No encontré una hoja con las columnas ' + C.falta + '.');
-    const filas = C.filas(rows);
+    let filas = C.filas(rows);
     if (!filas.length) throw new Error('No encontré filas de datos.');
+    if (inf === 'oc_informe') {
+      const desde = (document.getElementById('imp-desde') || {}).value;
+      if (!desde) throw new Error('Elegí desde qué fecha guardar las OC.');
+      const total = filas.length;
+      filas = filas.filter(r => (r.fecha_emision && r.fecha_emision >= desde) || ocAbierta(r.estado_oc));
+      if (!filas.length) throw new Error('No quedó ninguna OC desde el ' + fmtFecha(desde) + '.');
+      ok.textContent = 'De ' + total + ' filas del archivo se guardan ' + filas.length + '…';
+    }
     if (inf === 'pagos_realizar') {
       ok.textContent = 'Guardando ' + filas.length + ' facturas…';
       const { data, error } = await sb.rpc('compras_pagos_realizar_importar', { p_filas: filas, p_fecha_reporte: fecha });
