@@ -1029,13 +1029,16 @@ function tarFijasPlan(rows){
   });
   return plan;
 }
-/* ---------- Instructivo de Tareas (texto fijo; si cambia el circuito, actualizar acá) ---------- */
+/* ---------- Instructivos (texto fijo de cada solapa; si cambia el circuito, actualizar el texto) ---------- */
+const GUIA_CSS = '<style>.guia{padding:12px 18px 16px;font-size:13px;line-height:1.6}.guia ol,.guia ul{margin:4px 0 8px;padding-left:22px}.guia li{margin:3px 0}.guia h4{margin:12px 0 4px;font-size:13px}.guia .nota{background:#faf9f4;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12.5px}.guia table{border-collapse:collapse;margin:6px 0}.guia td,.guia th{border:1px solid var(--line);padding:4px 10px;font-size:12.5px;text-align:left;vertical-align:top}</style>';
+const guiaSec = (tit, html) => '<div class="card" style="margin-top:14px">' + cardH(tit, '') + '<div class="guia">' + html + '</div></div>';
+/* ---------- Instructivo de Tareas ---------- */
 function tarRenderAyuda(tabs){
   document.getElementById('topActions').innerHTML = '';
-  const sec = (tit, html) => '<div class="card" style="margin-top:14px">' + cardH(tit, '') + '<div class="guia">' + html + '</div></div>';
+  const sec = guiaSec;
   const sup = ' <span class="badge b-azul" title="Lo hace quien tiene el tilde «Tareas · ver todas» en el portal">supervisión</span>';
   const ir = (modo, txt) => '<a href="#" data-ay-ir="' + modo + '">' + txt + '</a>';
-  $main.innerHTML = tabs + '<style>.guia{padding:12px 18px 16px;font-size:13px;line-height:1.6}.guia ol,.guia ul{margin:4px 0 8px;padding-left:22px}.guia li{margin:3px 0}.guia h4{margin:12px 0 4px;font-size:13px}.guia .nota{background:#faf9f4;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12.5px}</style>'
+  $main.innerHTML = tabs + GUIA_CSS
     + sec('Cómo se organiza', '<ul>'
       + '<li><b>' + ir('mes', 'Tareas del mes') + ':</b> las tareas del cierre que está abierto, con su avance, por lista y por responsable.</li>'
       + '<li><b>' + ir('lista', 'Todas las tareas') + ':</b> por tipo — <b>Cierre de mes</b>, <b>Impuestos</b>, <b>Proveedores</b> y <b>Tareas varias</b> (puntuales). En cada una, «Ver» filtra: todas, <b>las mías</b>, creadas por mí o delegadas.</li>'
@@ -1758,16 +1761,54 @@ function spRenderSol(){
     ? INFORMES.map(([k,l]) => '<button class="btn ghost" data-cargar="' + k + '">' + ICO.upload + 'Cargar ' + esc(l) + '</button>').join('') : '';
   document.querySelectorAll('#topActions [data-cargar]').forEach(b => b.addEventListener('click', () => abrirCarga(b.dataset.cargar)));
   $main.innerHTML =
-      '<div class="mtabs" style="margin:4px 0 14px">' + tab('pendfac','Pendientes de facturar') + tab('solicitudes','Pagos solicitados') + tab('pagos','Pagos a realizar') + '</div>'
+      '<div class="mtabs" style="margin:4px 0 14px">' + tab('pendfac','Pendientes de facturar') + tab('solicitudes','Pagos solicitados') + tab('pagos','Pagos a realizar') + tab('ayuda','Instructivo') + '</div>'
     + '<div class="meta-bar"><strong>Informes de Tango</strong> (los carga Administración y Finanzas; Compras los consulta; cada carga reemplaza la anterior): '
     +   INFORMES.map(([k,l]) => '<span style="white-space:nowrap">' + esc(l) + ': ' + esc(metaTxt(k)) + '</span>').join(' &nbsp;·&nbsp; ')
     +   ociPeriodoNota() + '</div>'
-    + '<div class="card">' + (SP.tab === 'pendfac' ? vistaPendFac() : SP.tab === 'pagos' ? vistaPagos() : vistaSolicitudes()) + '</div>';
+    + (SP.tab === 'ayuda' ? spGuia() : '<div class="card">' + (SP.tab === 'pendfac' ? vistaPendFac() : SP.tab === 'pagos' ? vistaPagos() : vistaSolicitudes()) + '</div>');
   $main.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { SP.tab = b.dataset.tab; spRender(); }));
+  $main.querySelectorAll('[data-sp-ir]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); SP.tab = a.dataset.spIr; spRender(); window.scrollTo(0, 0); }));
   $main.querySelectorAll('[data-filtro]').forEach(b => b.addEventListener('click', () => { SP.filtro = b.dataset.filtro; spRender(); }));
   $main.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); spDetalle(b.dataset.abrir); }));
   $main.querySelectorAll('[data-pdf]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); spVerPdf(a.dataset.pdf); }));
   tablaEventos();
+}
+// Instructivo de Solicitudes de pago (texto fijo; si cambia el circuito, actualizar acá)
+function spGuia(){
+  const ir = (t, txt) => '<a href="#" data-sp-ir="' + t + '">' + txt + '</a>';
+  return GUIA_CSS
+    + guiaSec('Para qué sirve', 'Es el circuito de pagos con <b>Compras</b>: Compras pide el pago de una factura y Administración y Finanzas lo gestiona. '
+      + 'Las dos apps usan los <b>mismos datos</b>: lo que se confirma o comenta acá, Compras lo ve al instante (y al revés).<ul>'
+      + '<li><b>Compras</b>: adjunta la FAC y pide el pago (queda «Pendiente»); puede cancelar el pedido («Cancelada»).</li>'
+      + '<li><b>Administración y Finanzas</b>: sube los 3 informes de Tango y responde cada pedido: lo pasa a «En gestión», informa fecha estimada, lo marca «Pagada» y deja mensajes.</li></ul>')
+    + guiaSec('Las pestañas', '<ul>'
+      + '<li><b>' + ir('pendfac', 'Pendientes de facturar') + '</b>: las OC de Tango con saldo sin facturar, una fila por OC. La columna «FAC» muestra las facturas que cargó Compras y en qué quedó cada una (clic para abrirla). ⚠ = el neto de la FAC no coincide con lo pendiente de la OC.</li>'
+      + '<li><b>' + ir('solicitudes', 'Pagos solicitados') + '</b>: los pedidos de pago (las «FAC cargada» todavía sin pedir no aparecen). Chips por estado; columnas «Pago» y «Fecha de pago» (real o estimada); total al pie en $ y US$ de lo que se ve.</li>'
+      + '<li><b>' + ir('pagos', 'Pagos a realizar') + '</b>: el reporte de Tango, completado con Auxiliar, OC, Remito y Comprador del Informe OC (cruzado por proveedor + N° de comprobante). «Pago» indica el estado del pedido o «Sin pedir». Total al pie.</li></ul>'
+      + 'En todas: buscador, filtro ▾ por columna (tipo Excel; en fechas, rango Desde / Hasta), clic en el título para ordenar, ancho de columnas ajustable («Auto-ajustar columnas» lo vuelve al original) y «Limpiar filtros».'
+      + '<div class="nota">Pagos comprometidos para un día o hasta una fecha: en Pagos solicitados, filtro ▾ de «Fecha de pago» (para un día, Desde = Hasta). El total al pie suma lo filtrado.</div>')
+    + guiaSec('Cargar los informes de Tango', '<ol>'
+      + '<li>Exportar el informe de Tango en Excel (.xlsx).</li>'
+      + '<li>Arriba a la derecha: «Cargar Informe OC», «Cargar Pendientes de facturar» o «Cargar Pagos a realizar».</li>'
+      + '<li>Poner la <b>fecha del reporte</b> (viene la de hoy) y elegir el archivo → «Cargar».</li></ol>'
+      + '<ul><li>Cada carga <b>reemplaza</b> la anterior. Arriba de las pestañas queda la constancia de cada informe: fecha del reporte, cuándo y quién lo subió.</li>'
+      + '<li>La app busca la hoja que tenga las columnas del informe — Informe OC: «NRO ORDEN COMPRA» y «COD CLASIFICACIÓN»; Pendientes de facturar: «Nro. Orden de Compra» y «Pendiente de facturar sin impuestos»; Pagos a realizar: «Nro. Comprobante» y «Total Pendiente (CTE)». Si no la encuentra, avisa.</li>'
+      + '<li><b>Informe OC</b>: la nota 📌 de arriba indica desde qué fecha exportarlo para actualizarlo. Si la carga se corta a mitad, volver a cargar el archivo completo.</li>'
+      + '<li><b>Pagos a realizar</b>: si una factura con pedido de pago ya no figura en el reporte, se marca «⚠ fuera del informe» y se le agrega un comentario («se estima pagada, anulada u otro motivo»). <b>El estado no cambia</b>: lo sigue informando Administración.</li></ul>')
+    + guiaSec('Gestionar un pedido de pago', 'En Pagos solicitados → «Abrir». Se ve el detalle, el PDF de la factura y el historial. Según el estado:'
+      + '<table><tr><th>Estado</th><th>Qué se puede hacer</th></tr>'
+      + '<tr><td><span class="badge b-ambar">Pendiente</span></td><td>«Pasar a En gestión» (avisa a Compras que Finanzas ya lo tomó). También: marcar Pagada, informar fecha estimada, dejar un mensaje.</td></tr>'
+      + '<tr><td><span class="badge b-azul">En gestión</span></td><td>«Marcar Pagada» (fecha de pago obligatoria, comentario opcional) · «Fecha estimada de pago» → «Informar» · «Dejar un mensaje» → «Enviar».</td></tr>'
+      + '<tr><td><span class="badge b-verde">Pagada</span></td><td>«Volver a En gestión» con motivo, si no se pudo pagar o se marcó por error (se borra la fecha de pago y queda en el historial). Dejar un mensaje.</td></tr>'
+      + '<tr><td><span class="badge b-rojo">Cancelada</span></td><td>La canceló Compras (no quiere decir que no se haya pagado): se puede marcar Pagada o dejar un mensaje.</td></tr>'
+      + '<tr><td><span class="badge b-gris">FAC cargada</span></td><td>Compras cargó la factura pero todavía no pidió el pago: no hay acciones.</td></tr></table>'
+      + 'Todo queda en el historial con usuario, fecha y hora, y Compras lo ve al instante.')
+    + guiaSec('Avisos que pueden aparecer', '<ul>'
+      + '<li><b>⚠ fuera del informe dd/mm</b>: la factura ya no figura en Pagos a realizar (se estima pagada, anulada u otro motivo). Conviene confirmar y, si corresponde, marcarla Pagada.</li>'
+      + '<li><b>✓ leída por Adm.</b>: Administración ya tomó el pedido.</li>'
+      + '<li><b>⚠ en la columna FAC</b>: el neto de la factura no coincide con lo pendiente de la OC.</li>'
+      + '<li>En Pagos a realizar, «—» en Auxiliar / OC / Remito: la factura no está en el Informe OC (factura sin OC o Informe OC desactualizado).</li></ul>')
+    + guiaSec('Quién puede hacer qué', 'Se define en el portal → Usuarios, sección «Solicitudes de pago». Con «Editar» se ven los botones de carga de informes y las acciones de cada pedido; con «Ver» (o cargo lector) solo se consulta: abrir el detalle, ver el PDF y filtrar. Dirección ve y edita todo.');
 }
 // Encabezado de card igual que Compras: título + texto explicativo en gris
 function cardH(titulo, meta){ return '<div class="card-h"><h3>' + esc(titulo) + '</h3><span class="meta">' + meta + '</span></div>'; }
@@ -2739,9 +2780,52 @@ function cuyMovsDe(cn){
 const cuySortMovs = () => CUY.movs.sort((a,b) => String(a.fecha).localeCompare(String(b.fecha)) || String(a.id).localeCompare(String(b.id), 'es', { numeric:true }));
 
 /* ---------- Pestañas de Contabilidad UY ---------- */
-const CUY_TABS = [['comp','Comprobantes'], ['banco','Conciliación bancos'], ['efectivo','Efectivo'], ['asientos','Asientos'], ['res','Resultados'], ['cot','Cotizaciones'], ['prov','Proveedores'], ['cli','Clientes'], ['plan','Plan de cuentas']];
+const CUY_TABS = [['comp','Comprobantes'], ['banco','Conciliación bancos'], ['efectivo','Efectivo'], ['asientos','Asientos'], ['res','Resultados'], ['cot','Cotizaciones'], ['prov','Proveedores'], ['cli','Clientes'], ['plan','Plan de cuentas'], ['ayuda','Instructivo']];
 function cuyTabs(){
   return '<div class="mtabs" style="margin:4px 0 14px">' + CUY_TABS.map(([id,l]) => '<button class="mtab' + (CUY.tab === id ? ' active' : '') + '" data-cuytab="' + id + '">' + l + '</button>').join('') + '</div>';
+}
+// Instructivo de Contabilidad UY (texto fijo; si cambia el circuito, actualizar acá)
+function cuyGuia(){
+  const ir = (t, txt) => '<a href="#" data-cuy-ir="' + t + '">' + txt + '</a>';
+  return GUIA_CSS
+    + guiaSec('Para qué sirve', 'Lleva la contabilidad de <b>Avance Oriental SAS</b> (Uruguay): se cargan los comprobantes, se concilian bancos y caja, y se arman los asientos para cargar en Tango. '
+      + 'Los asientos se arman en <b>dólares</b>: lo que está en $U se pasa a US$ con la cotización BCU del día.')
+    + guiaSec('Circuito del mes (orden sugerido)', '<ol>'
+      + '<li>Tener al día ' + ir('prov', 'Proveedores') + ', ' + ir('cli', 'Clientes') + ', ' + ir('plan', 'Plan de cuentas') + ' y ' + ir('cot', 'Cotizaciones') + '.</li>'
+      + '<li>' + ir('comp', 'Comprobantes') + ': cargar las facturas del mes y completar TC y cuenta.</li>'
+      + '<li>' + ir('banco', 'Conciliación bancos') + ': importar el extracto, conciliar, marcar gastos bancarios y cargar el saldo del extracto hasta que quede «Conciliado».</li>'
+      + '<li>' + ir('efectivo', 'Efectivo') + ': facturas pagadas en efectivo y saldo del arqueo.</li>'
+      + '<li>' + ir('asientos', 'Asientos') + ': exportar, cargar en Tango y anotar el N° de asiento.</li>'
+      + '<li>Asientos → «Cierre de mes»: diferencia de cambio y «Guardar cierre».</li>'
+      + '<li>' + ir('res', 'Resultados') + ': controlar el estado de resultados.</li></ol>')
+    + guiaSec('Comprobantes', '<ul>'
+      + '<li>Arriba: Total en pesos, IVA compras, Subtotal USD y «Para revisar».</li>'
+      + '<li>«Nuevo comprobante» para cargar; el TC y la cuenta se editan directo en la tabla. «Completar N cuentas sugeridas» completa las que la app puede deducir.</li>'
+      + '<li>IVA 22% por defecto; Neto = Total − IVA. Las N/C van en negativo y toman la fecha y el TC de la factura que anulan.</li>'
+      + '<li>Si falta el TC de una factura en US$, la fila queda amarilla, no suma y el total dice «Total parcial».</li>'
+      + '<li>Para dar de baja una factura ya registrada, mejor marcarla Anulada y cargar la N/C que borrarla.</li></ul>')
+    + guiaSec('Conciliación bancos y Efectivo', '<ul>'
+      + '<li>Cuentas: Santander US$ y $U; Efectivo US$ y $U.</li>'
+      + '<li>«Importar extracto»: formato Santander UY (1ª hoja US$, 2ª hoja $U). No duplica movimientos ya cargados.</li>'
+      + '<li>«Conciliar automático»: propone pares movimiento ↔ factura por importe igual y fechas cercanas → «Conciliar N».</li>'
+      + '<li>En cada movimiento: «Facturas» para vincularlo a una o varias facturas (admite pagos parciales) o «Es gasto bancario».</li>'
+      + '<li>«Movimiento» para cargar a mano (cambio de moneda, retiro banco → caja, etc.); «Factura pagada en efectivo» en Efectivo.</li>'
+      + '<li>«Cierres mensuales»: cargar el saldo del extracto (o del arqueo). Estados: Falta extracto · Diferencia · Saldo ok · Conciliado.</li>'
+      + '<li>«Exportar conciliación» baja el Excel.</li></ul>')
+    + guiaSec('Asientos', '<ul>'
+      + '<li>Sub-solapas: Registro de facturas · Pagos y gastos bancarios · Cierre de mes (dif. de cambio).</li>'
+      + '<li>Exportar: «Para el contador UY», «Archivo de importación» (para importar en Tango, queda en Borrador) o «Planilla para cargar en Tango».</li>'
+      + '<li>Después de cargarlos en Tango: tildar «En Tango» (o «Tildar visibles») y anotar el N° de asiento.</li>'
+      + '<li>Si aparece «Faltan datos para el asiento»: falta TC, cuenta o proveedor en el comprobante; completarlo y volver.</li>'
+      + '<li>Cierre de mes: TC de cierre, ajuste por diferencia de cambio de bancos y Proveedores (cajas e IVA no se ajustan) → «Guardar cierre».</li></ul>')
+    + guiaSec('Resultados y Cotizaciones', '<ul>'
+      + '<li><b>' + ir('res', 'Resultados') + '</b>: estado de resultados en US$, $U o AR$, con rango Desde / Hasta. «Exportar Excel».</li>'
+      + '<li><b>' + ir('cot', 'Cotizaciones') + '</b>: «Importar cotizaciones» (BCU, dólar billete); un valor cargado a mano gana sobre el automático, salvo que se tilde «Pisar las cargadas a mano». Si falta una fecha se usa la última anterior. «Desactualizada» = más de 5 días sin cotización. «Completar TC de N factura(s) USD» pasa el TC a los comprobantes que no lo tienen.</li></ul>')
+    + guiaSec('Proveedores, Clientes y Plan de cuentas', '<ul>'
+      + '<li><b>Proveedores</b>: diccionario con código Tango y RUT (ambos únicos). «Importar del Excel» o «Nuevo proveedor». Abajo se listan los comprobantes de proveedores que no están en el diccionario → «Agregar al diccionario».</li>'
+      + '<li><b>Clientes</b>: igual; contrapartida por defecto 41000001.</li>'
+      + '<li><b>Plan de cuentas</b>: las cuentas que usa la app para armar los asientos (bancos, cajas, Proveedores, IVA, gastos bancarios, diferencia de cambio). La cuenta de gasto de cada factura se elige en Comprobantes.</li></ul>')
+    + guiaSec('Quién puede hacer qué', 'Se define en el portal → Usuarios, sección «Contabilidad UY». Con «Editar» se carga y modifica; con «Ver» solo se consulta y se exporta.');
 }
 function cuyTabsEventos(){ $main.querySelectorAll('[data-cuytab]').forEach(b => b.addEventListener('click', () => { CUY.tab = b.dataset.cuytab; cuyRender(); })); }
 // Al volver a dibujar la MISMA vista (después de guardar un N° de asiento, un TC, una cuenta…) se mantiene la posición:
@@ -2764,6 +2848,12 @@ function cuyRender(){
   window.scrollTo(x, y);
 }
 function cuyRender0(){
+  if (CUY.tab === 'ayuda') {
+    document.getElementById('topActions').innerHTML = '';
+    $main.innerHTML = cuyTabs() + cuyGuia(); cuyTabsEventos();
+    $main.querySelectorAll('[data-cuy-ir]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); CUY.tab = a.dataset.cuyIr; cuyRender(); window.scrollTo(0, 0); }));
+    return;
+  }
   CUY_ESP = cuyEspejos(); cuySerieArmar();
   if (CUY.tab === 'comp') return cuyRenderComp();
   document.getElementById('topActions').innerHTML = '';
