@@ -20,6 +20,9 @@ Solapas:
   SQL (en orden): `sql/2026-10_contabilidad_uy_conciliacion.sql`, `sql/2026-10_contabilidad_uy_diccionario.sql`,
   `sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql`, `_aplicaciones`, `_usd_oficial`, `_contrapartida`,
   `_imputacion_factura`, `_usd_billete`, `_ajuste_cierre`, `_proveedores`, `_clientes`, `_a_revisar` (todos `sql/2026-10_contabilidad_uy_*.sql`).
+  **Importar** (sin SQL): «Importar extracto» lee el .xls del banco tal cual (Santander: Fecha / Referencia / Tipo Movimiento / Débito / Crédito / Saldo; la
+  cuenta se propone por moneda, los cambios de moneda se detectan por fecha + referencia en las dos cuentas, y lo ya cargado no se duplica).
+  «Importar Excel» en Comprobantes usa las mismas columnas que «Exportar Excel» (vista previa, omite las ya cargadas por proveedor + serie / N°).
   Comprobantes: las observaciones son comentarios; solo se pone amarilla la fila con TC pendiente o con el tilde «Requiere acción» (`_a_revisar`).
 - **Tareas** (menú lateral): quién asigna a quién, fecha, vencimiento, estado (pendiente / en curso / hecha), adjuntos y
   comentarios. Quien tiene tildado «Tareas · ver todas» ve todas; el resto, las que le asignaron o creó.
