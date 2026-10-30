@@ -19,7 +19,8 @@ Solapas:
   diferencia de cambio (DOL para lo que está en pesos uruguayos, PES para el peso argentino; el IVA no se ajusta).
   SQL (en orden): `sql/2026-10_contabilidad_uy_conciliacion.sql`, `sql/2026-10_contabilidad_uy_diccionario.sql`,
   `sql/2026-10_contabilidad_uy_cotizaciones_cierres.sql`, `_aplicaciones`, `_usd_oficial`, `_contrapartida`,
-  `_imputacion_factura`, `_usd_billete`, `_ajuste_cierre`, `_proveedores`, `_clientes` (todos `sql/2026-10_contabilidad_uy_*.sql`).
+  `_imputacion_factura`, `_usd_billete`, `_ajuste_cierre`, `_proveedores`, `_clientes`, `_a_revisar` (todos `sql/2026-10_contabilidad_uy_*.sql`).
+  Comprobantes: las observaciones son comentarios; solo se pone amarilla la fila con TC pendiente o con el tilde «Requiere acción» (`_a_revisar`).
 - **Tareas** (menú lateral): quién asigna a quién, fecha, vencimiento, estado (pendiente / en curso / hecha), adjuntos y
   comentarios. Quien tiene tildado «Tareas · ver todas» ve todas; el resto, las que le asignaron o creó.
   SQL: `sql/2026-10_tareas.sql` (tablas, bucket privado `adminfin-tareas` y permisos) y después

@@ -1658,7 +1658,11 @@ function cuyPesos(r, k){
   const tc = cuyNum(r.tc), u = cuyNum(r[k + '_usd']);
   return (tc == null || u == null) ? null : Math.round(u * tc * 100) / 100;
 }
-const cuyRevisar = r => cuyTcPend(r) || !!String(r.observaciones || '').trim();
+// En amarillo solo lo que hay que hacer algo: TC pendiente o el tilde "Requiere acción" (a_revisar, sql/2026-10_contabilidad_uy_a_revisar.sql).
+// Las observaciones son comentarios: no pintan la fila por sí solas.
+const cuyARevisar = r => r.a_revisar === true;
+const cuyHayRev = () => !CUY.lista.length || ('a_revisar' in CUY.lista[0]);   // ¿ya existe la columna? (sin filas, se asume que sí)
+const cuyRevisar = r => cuyTcPend(r) || cuyARevisar(r);
 function fmtUYU(v){ return v == null ? '—' : '$U ' + fmtNum(v); }
 function fmtTC(v){ return v == null ? '—' : (+v).toLocaleString('es-AR', { minimumFractionDigits:3, maximumFractionDigits:4 }); }
 function fmtPeriodo(p){ const t = String(p || ''); return /^\d{6}$/.test(t) ? t.slice(0,4) + '-' + t.slice(4) : (t || ''); }
@@ -1732,7 +1736,8 @@ function cuyCols(){
         return '<span class="badge ' + (e === 'Con movimiento' ? 'b-verde' : e === 'Pagado de más' ? 'b-rojo' : (e === 'Sin movimiento' || e === 'Pago parcial') ? 'b-ambar' : 'b-gris') + '">' + esc(e) + '</span>'
           + (e === 'Pago parcial' || e === 'Pagado de más' ? '<div class="muted">saldo ' + fmtMon(cuySaldoFac(r), mon) + '</div>' : '') + pagos; } },
     { id:'rel', t:'Doc. relacionado', s:r => r.doc_relacionado || '', td:r => esc(r.doc_relacionado || '—') },
-    { id:'obs', t:'Observaciones', v:r => String(r.observaciones || '').trim() ? 'Con observaciones' : 'Sin observaciones', cls:'wrap', td:r => esc(r.observaciones || '') },
+    { id:'obs', t:'Observaciones', v:r => String(r.observaciones || '').trim() ? 'Con observaciones' : 'Sin observaciones', cls:'wrap', td:r => (cuyARevisar(r) ? '<span class="badge b-ambar" title="Alguien tiene que responder o hacer algo con este comprobante">⚑ Requiere acción</span> ' : '') + esc(r.observaciones || '') },
+    { id:'rev', t:'Acción', v:r => cuyARevisar(r) ? 'Requiere acción' : 'Sin acción pendiente', td:r => cuyARevisar(r) ? '<b class="warn">⚑</b>' : '' },
     { id:'acc', t:'', td:r => SP.editar ? '<div class="row-actions"><button class="iconbtn" title="Editar" data-cuy-ed="' + esc(r.id) + '">' + ICO.edit + '</button>'
         + '<button class="iconbtn del" title="Eliminar" data-cuy-del="' + esc(r.id) + '">' + ICO.del + '</button></div>' : '' },
   ];
@@ -1751,21 +1756,21 @@ function cuyRenderComp(){
 
   const { cols, filas } = cuyFiltradas();
   const suma = k => filas.reduce((a,r) => a + (cuyPesos(r,k) || 0), 0);
-  const sinTc = filas.filter(cuyTcPend).length, conObs = filas.filter(r => String(r.observaciones || '').trim()).length;
+  const sinTc = filas.filter(cuyTcPend).length, conObs = filas.filter(r => String(r.observaciones || '').trim()).length, aRev = filas.filter(cuyARevisar).length;
   const usd = filas.filter(cuyEsUSD).reduce((a,r) => a + (cuyNum(r.total_usd) || 0), 0);
   const parcial = sinTc ? '<span class="warn">Total parcial: ' + sinTc + ' en USD sin TC no suman</span>' : 'Todos los comprobantes con TC';
   const kpis = '<div class="kpi-grid">'
     + '<div class="kpi"><div class="kpi-label">Total en pesos</div><div class="kpi-value">' + fmtUYU(suma('total')) + '</div><div class="kpi-sub">' + parcial + '</div></div>'
     + '<div class="kpi"><div class="kpi-label">IVA compras</div><div class="kpi-value">' + fmtUYU(suma('iva')) + '</div><div class="kpi-sub">Neto ' + fmtUYU(suma('neto')) + '</div></div>'
     + '<div class="kpi"><div class="kpi-label">Subtotal USD</div><div class="kpi-value">US$ ' + fmtNum(usd) + '</div><div class="kpi-sub">Facturas en dólares (la N/C netea la anulada)</div></div>'
-    + '<div class="kpi"><div class="kpi-label">Para revisar</div><div class="kpi-value' + ((sinTc || conObs) ? ' warn' : '') + '">' + filas.filter(cuyRevisar).length + '</div><div class="kpi-sub">' + sinTc + ' TC pendiente' + (sinTc === 1 ? '' : 's') + ' · ' + conObs + ' con observaciones'
+    + '<div class="kpi"><div class="kpi-label">Para revisar</div><div class="kpi-value' + ((sinTc || aRev) ? ' warn' : '') + '">' + filas.filter(cuyRevisar).length + '</div><div class="kpi-sub">' + sinTc + ' TC pendiente' + (sinTc === 1 ? '' : 's') + ' · ' + aRev + ' requiere' + (aRev === 1 ? '' : 'n') + ' acción · ' + conObs + ' con comentarios'
     +   (sinCta.length ? ' · <span class="warn">' + sinCta.length + ' sin cuenta contable</span>' : '') + '</div></div>'
     + '</div>';
   const iN = cols.findIndex(c => c.id === 'neto');
   const pie = '<tfoot><tr><td colspan="' + iN + '" class="num"><b>Total (' + filas.length + (filas.length !== CUY.lista.length ? ' de ' + CUY.lista.length : '') + ')' + (sinTc ? ' · parcial' : '') + '</b></td>'
     + '<td class="num"><b>' + fmtUYU(suma('neto')) + '</b></td><td class="num"><b>' + fmtUYU(suma('iva')) + '</b></td><td class="num"><b>' + fmtUYU(suma('total')) + '</b></td>'
     + '<td colspan="' + (cols.length - iN - 3) + '"></td></tr></tfoot>';
-  const head = cardH('Comprobantes', 'Una fila por CFE. Los montos en USD se pasan a pesos con el TC de cada factura (editable). En amarillo: TC pendiente u observaciones a revisar.');
+  const head = cardH('Comprobantes', 'Una fila por CFE. Los montos en USD se pasan a pesos con el TC de cada factura (editable). En amarillo: TC pendiente o comprobante marcado como «Requiere acción».');
   $main.innerHTML = cuyTabs() + kpis + '<div class="card">' + head
     + (CUY.lista.length ? tablaHerramientas('cuy', 'Buscar proveedor, RUT, serie, concepto, proyecto, observaciones…')
         + (filas.length ? tablaHtml('cuy', cols, filas, pie, r => cuyRevisar(r) ? 'revisar' : '') : '<div class="empty">Ningún comprobante coincide con los filtros.</div>')
@@ -1862,7 +1867,9 @@ function cuyForm(id, preset){
     + '<div class="frow c3">' + inp('cf-est','Estado de pago', c.estado_pago, ' list="dl-est"') + inp('cf-cta','Cuenta', c.cuenta, ' list="dl-cta" placeholder="Ej. Santander USD"') + inp('cf-fpago','Fecha de pago', c.fecha_pago, ' type="date"') + '</div>'
     + '<div class="frow c3">' + inp('cf-rel','Doc. relacionado', c.doc_relacionado, ' placeholder="Serie que anula / anulada por"')
     +   '<div class="field"><label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink)"><input type="checkbox" id="cf-anul"' + (c.anulada ? ' checked' : '') + ' style="width:auto"> Anulada</label></div><div></div></div>'
-    + '<div class="frow"><div class="field"><label>Observaciones</label><textarea id="cf-obs" rows="2" placeholder="Algo a revisar (queda la fila en amarillo)">' + esc(c.observaciones || '') + '</textarea></div></div>'
+    + '<div class="frow"><div class="field"><label>Observaciones (comentario)</label><textarea id="cf-obs" rows="2" placeholder="Comentario libre">' + esc(c.observaciones || '') + '</textarea>'
+    + (cuyHayRev() ? '<label class="chk-lbl" style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink);margin-top:6px"><input type="checkbox" id="cf-arev"' + (c.a_revisar ? ' checked' : '') + ' style="width:auto;margin-right:6px"> Requiere acción: alguien tiene que responder o hacer algo con esto (queda la fila en amarillo)</label>'
+        : '<div class="muted" style="font-size:11.5px;margin-top:6px">Para poder marcar «Requiere acción» falta correr sql/2026-10_contabilidad_uy_a_revisar.sql.</div>') + '</div></div>'
     + dl('dl-tipo', CUY_TIPOS.concat(CUY.lista.map(x => x.tipo_cfe))) + dl('dl-prov', CUY.provs.map(p => p.nombre).concat(CUY.lista.map(x => x.proveedor))) + dl('dl-rubro', CUY_RUBROS.concat(CUY.lista.map(x => x.rubro)))
     + dl('dl-proy', cuyProyOpciones(CUY.lista.map(x => x.proyecto))) + dl('dl-est', CUY_ESTADOS.concat(CUY.lista.map(x => x.estado_pago))) + dl('dl-cta', CUY_CTAS.map(x => x.n).concat(CUY.lista.map(x => x.cuenta)))
     + '<div class="box"><h4>Imputación contable</h4>'
@@ -1947,6 +1954,7 @@ async function cuyGuardar(id){
     estado_pago: v('cf-est') || null, cuenta: v('cf-cta') || null, fecha_pago: v('cf-fpago') || null,
     doc_relacionado: v('cf-rel') || null, anulada: $('cf-anul').checked, observaciones: v('cf-obs') || null,
   };
+  if ($('cf-arev')) fila.a_revisar = $('cf-arev').checked;
   const previa = id ? CUY.lista.find(x => x.id === id) : null;
   for (const [campo, inpId] of [['cuenta_gasto','cf-cgasto'], ['cuenta_contra','cf-ccontra']]) {
     const val = v(inpId);
@@ -1998,7 +2006,7 @@ function cuyExportar(){
     'Moneda': r.origen_moneda || '', 'Neto USD': cuyEsUSD(r) ? cuyNetoOrig(r) : null, 'IVA USD': cuyNum(r.iva_usd), 'Total USD': cuyNum(r.total_usd), 'TC': cuyNum(r.tc),
     'Neto $U': cuyPesos(r,'neto'), 'IVA $U': cuyPesos(r,'iva'), 'Total $U': cuyPesos(r,'total'),
     'Estado de pago': r.estado_pago || '', 'Cuenta': r.cuenta || '', 'Fecha de pago': r.fecha_pago || '', 'Anulada': r.anulada ? 'Sí' : 'No',
-    'Doc. relacionado': r.doc_relacionado || '', 'Observaciones': r.observaciones || '', 'TC pendiente': cuyTcPend(r) ? 'Sí' : '',
+    'Doc. relacionado': r.doc_relacionado || '', 'Observaciones': r.observaciones || '', 'Requiere acción': cuyARevisar(r) ? 'Sí' : '', 'TC pendiente': cuyTcPend(r) ? 'Sí' : '',
     'Conciliación': cuyCompConc(r), 'N° asiento Tango': r.asiento_num || '' }));
   const ws = XLSX.utils.json_to_sheet(datos), wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Contabilidad UY');
