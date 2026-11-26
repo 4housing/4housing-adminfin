@@ -3108,7 +3108,7 @@ function cuyGuia(){
       + '<li>Cuentas: Santander US$ y $U; Efectivo US$ y $U.</li>'
       + '<li>«Importar extracto»: formato Santander UY (1ª hoja US$, 2ª hoja $U). No duplica movimientos ya cargados.</li>'
       + '<li>«Conciliar automático»: propone pares movimiento ↔ factura por importe igual y fechas cercanas → «Conciliar N».</li>'
-      + '<li>En cada movimiento: «Facturas» para vincularlo a una o varias facturas (admite pagos parciales) o «Es gasto bancario».</li>'
+      + '<li>En cada movimiento: «Facturas» para vincularlo a una o varias facturas (admite pagos parciales) o «Es gasto bancario». Los gastos bancarios (comisiones) quedan siempre con rubro <b>K) ESTRUCTURA</b>; <b>R) FINANCIERO</b> es solo para transferencias entre cuentas propias (cambio de moneda, retiro banco → caja).</li>'
       + '<li>«Movimiento» para cargar a mano (cambio de moneda, retiro banco → caja, etc.); «Factura pagada en efectivo» en Efectivo.</li>'
       + '<li>«Cierres mensuales»: cargar el saldo del extracto (o del arqueo). Estados: Falta extracto · Diferencia · Saldo ok · Conciliado.</li>'
       + '<li>«Exportar conciliación» baja el Excel.</li></ul>')
@@ -3286,7 +3286,7 @@ function cuyRenderConc(g){
   $main.querySelectorAll('[data-gbanc]').forEach(b => b.addEventListener('click', async () => {
     const m = CUY.movs.find(x => x.id === b.dataset.gbanc); if (!m) return; b.disabled = true;
     const c = { tipo: 'gasto_bancario' }; if (!String(m.clasificacion || '').trim()) c.clasificacion = 'GASTOS BANCARIOS';
-    if (!String(m.rubro || '').trim()) c.rubro = 'K) ESTRUCTURA';   // mismo rubro que los demás gastos bancarios de la planilla
+    c.rubro = CUY_RUBRO_GBANC;   // siempre K) ESTRUCTURA (aunque viniera R) FINANCIERO de la planilla)
     try { await cuyMovGuardar(m.id, c); toast('Marcado como gasto bancario (sin factura)'); cuyRender(); }
     catch (e) { b.disabled = false; toast('No se guardó: ' + (e.message || e)); }
   }));
@@ -3512,7 +3512,16 @@ function cuyMovForm(id, preset){
     catch (e) { err.textContent = 'Error: ' + (e.message || e); $('mf-ok').disabled = false; }
   });
 }
+// Comisiones / gastos del banco van siempre al rubro K) ESTRUCTURA. R) FINANCIERO queda solo para transferencias entre
+// cuentas propias (cambio de moneda, retiro banco → caja, etc.) — Micaela, nov 2026.
+const CUY_RUBRO_GBANC = 'K) ESTRUCTURA';
+function cuyRubroGbanc(fila, actual){
+  const tipo = fila.tipo !== undefined ? fila.tipo : (actual && actual.tipo);
+  if (tipo === 'gasto_bancario') fila.rubro = CUY_RUBRO_GBANC;
+  return fila;
+}
 async function cuyMovGuardar(id, fila){
+  cuyRubroGbanc(fila, id ? CUY.movs.find(x => x.id === id) : null);
   const q = id ? sb.from(CUY_MOV_T).update(fila).eq('id', id) : sb.from(CUY_MOV_T).insert(fila);
   const { data, error } = await q.select();
   if (error) throw error;
@@ -3703,7 +3712,7 @@ function cuyImportar(){
     btn.disabled = true;
     try {
       for (let i = 0; i < nuevos.length; i += 500) {
-        const { data, error } = await sb.from(CUY_MOV_T).insert(nuevos.slice(i, i + 500)).select();
+        const { data, error } = await sb.from(CUY_MOV_T).insert(nuevos.slice(i, i + 500).map(f => cuyRubroGbanc(f))).select();
         if (error) throw error;
         if (!data || !data.length) throw new Error('No se guardó: sin permiso de edición.');
         CUY.movs = CUY.movs.concat(data);
