@@ -163,7 +163,8 @@ table.grid[data-tbl=cuy] td{white-space:nowrap;}
 table.grid[data-tbl=cuy] td.wrap{white-space:normal;min-width:200px;}
 table.grid td input.tc-in{width:92px;border:1px solid var(--line-strong);border-radius:7px;padding:4px 6px;font-size:11px;text-align:right;background:#fff;font-family:inherit;}
 table.grid td input.tc-in.vacio{border-color:#e0ab3f;background:#fffaf0;}
-.row-actions{display:flex;gap:6px;justify-content:flex-end;}
+.row-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;}
+table.grid td.acc{overflow:visible!important;}   /* con ancho fijo, los botones de acción no se cortan: bajan de renglón */
 .iconbtn.del:hover{color:#b4554e;border-color:#e8cfcc;}
 .btn.danger{background:#fff;color:#b4554e;border:1px solid #e8cfcc;}
 .btn.danger:hover{background:#fbf0ef;}
@@ -3239,7 +3240,7 @@ function cuyRenderConc(g){
         if (cuyMovEnFactura(m)) { const ns = cuyCompDeMov(m.id).map(r => String(r.asiento_num || '').trim()); return '<span class="muted" title="No lleva asiento propio: la caja sale en el asiento de la factura">en la factura</span><div>' + (ns.every(Boolean) ? esc(ns.join(', ')) : '<span class="warn">factura sin N° de asiento</span>') + '</div>'; }
         if (cuyEsCajaEspejo(m)) { const b = CUY_ESPC[m.id]; return '<span class="muted" title="No lleva asiento propio: va en el asiento del movimiento del banco">en el del banco</span><div>' + (String(b.asiento_num || '').trim() ? esc(b.asiento_num) : '<span class="muted">pendiente</span>') + '</div>'; }
         return esc(m.asiento_num || 'pendiente'); } },
-    { id:'acc', t:'', td:m => SP.editar ? '<div class="row-actions">'
+    { id:'acc', t:'', cls:'acc', td:m => SP.editar ? '<div class="row-actions">'
         + (cuyMovEstado(m) === 'Sin factura' ? '<button class="btn ghost sm" data-gbanc="' + esc(m.id) + '" title="Es una comisión / gasto del banco: no lleva factura. El respaldo es el extracto y genera su asiento de gasto bancario.">Es gasto bancario</button>' : '')
         + (+m.importe < 0 && m.tipo !== 'gasto_bancario' && m.tipo !== 'saldo_inicial' ? '<button class="btn ghost sm" data-vinc="' + esc(m.id) + '">Facturas</button>' : '')
         + '<button class="iconbtn" title="Editar" data-mov-ed="' + esc(m.id) + '">' + ICO.edit + '</button><button class="iconbtn del" title="Eliminar" data-mov-del="' + esc(m.id) + '">' + ICO.del + '</button></div>' : '' },
