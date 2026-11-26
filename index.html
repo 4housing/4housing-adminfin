@@ -1596,6 +1596,25 @@ async function spCargar(){
   await fsCargar();
   SP.cargado = true;
   if (VISTA === 'sol') spRender();
+  spTransfUYAuto();
+}
+// Transferencias Santander UY pedidas por Compras: la factura (CFE) se registra sola en Contabilidad UY cuando la abre
+// alguien que edita Contabilidad UY (la función de la base la crea una sola vez y deja el vínculo en el pedido).
+let SP_TUY_CORRIENDO = false;
+async function spTransfUYAuto(){
+  if (SP_TUY_CORRIENDO || !PERM.editar.has('cuy')) return;
+  const pend = SP.lista.filter(s => s.tipo === 'transferencia_uy' && !s.cuy_comprobante_id && !['Cancelada','FAC cargada'].includes(s.estado || 'Pendiente'));
+  if (!pend.length) return;
+  SP_TUY_CORRIENDO = true; let n = 0;
+  try {
+    for (const s of pend) {
+      const { data, error } = await sb.rpc('compras_transf_uy_registrar_fac', { p_id: +s.id });
+      if (error) { console.warn('registrar factura UY', s.id, error.message); continue; }
+      const i = SP.lista.findIndex(x => String(x.id) === String(s.id)); if (i >= 0 && data) SP.lista[i] = data;
+      if (data && data.cuy_comprobante_id) n++;
+    }
+  } finally { SP_TUY_CORRIENDO = false; }
+  if (n) { CUY.cargado = false; toast(n + ' factura' + (n > 1 ? 's' : '') + ' de transferencias Santander UY registrada' + (n > 1 ? 's' : '') + ' en Contabilidad UY'); if (VISTA === 'sol') spRender(); }
 }
 
 /* ---------- Constancia de los informes ---------- */
@@ -1804,6 +1823,11 @@ function spGuia(){
       + '<li>La app busca la hoja que tenga las columnas del informe — Informe OC: «NRO ORDEN COMPRA» y «COD CLASIFICACIÓN»; Pendientes de facturar: «Nro. Orden de Compra» y «Pendiente de facturar sin impuestos»; Pagos a realizar: «Nro. Comprobante» y «Total Pendiente (CTE)» (no importan mayúsculas ni acentos). Si no la encuentra, avisa.</li>'
       + '<li><b>Informe OC</b>: se puede exportar <b>completo</b> (desde 2016 pesa unos 7 MB y tarda unos segundos en leerse). Al cargarlo se elige <b>«Guardar OC emitidas desde»</b> (viene el 1° de enero del año anterior): se guardan las OC desde esa fecha <b>más las que siguen abiertas</b> (Emitida / Autorizada) aunque sean anteriores. La fecha tiene que cubrir las OC de las facturas que siguen en Pagos a realizar. Exportarlo de Tango ya filtrado desde una fecha también sirve y es más liviano. Si la carga se corta a mitad, volver a cargar el archivo completo.</li>'
       + '<li><b>Pagos a realizar</b>: si una factura con pedido de pago ya no figura en el reporte, se marca «⚠ fuera del informe» y se le agrega un comentario («se estima pagada, anulada u otro motivo»). <b>El estado no cambia</b>: lo sigue informando Administración.</li></ul>')
+    + guiaSec('Transferencias por Santander UY', 'Para las OG de Compras marcadas «Se paga desde: Santander UY» (solo US$). '
+    + '<ol><li>El comprador pide la transferencia con la factura (CFE) adjunta: aparece en <b>Pagos solicitados</b> con el badge <span class="badge b-azul">Transferencia Santander UY</span> y la OG en la columna «OC».</li>'
+    + '<li>Al abrir esta pantalla alguien que edita Contabilidad UY, <b>la factura se registra sola en Contabilidad UY → Comprobantes</b> (proveedor, RUT y rubro del diccionario UY; CFE, fecha, total, IVA y proyecto que cargó el comprador; cuenta Santander USD, estado PENDIENTE). Completar ahí el TC y la cuenta de gasto como con cualquier comprobante. En el detalle del pedido está el link «ver en Contabilidad UY».</li>'
+    + '<li>Hacer la transferencia y «Marcar Pagada»: la factura en Contabilidad UY pasa a PAGADO con esa fecha. Si se vuelve a En gestión, la factura vuelve a PENDIENTE.</li>'
+    + '<li>Al importar el extracto, «Conciliar automático» vincula el movimiento con la factura. El asiento lo arma Contabilidad UY (Compras no lo exporta a Tango).</li></ol>')
     + guiaSec('Gestionar un pedido de pago', 'En Pagos solicitados → «Abrir». Se ve el detalle, el PDF de la factura y el historial. Según el estado:'
       + '<table><tr><th>Estado</th><th>Qué se puede hacer</th></tr>'
       + '<tr><td><span class="badge b-ambar">Pendiente</span></td><td>«Pasar a En gestión» (avisa a Compras que Finanzas ya lo tomó). También: marcar Pagada, informar fecha estimada, dejar un mensaje.</td></tr>'
@@ -1884,7 +1908,8 @@ function vistaSolicitudes(){
   const cols = [
     { id:'fac', t:'Factura', v:s => s.nro_factura || '(sin N°)', td:s => '<strong>' + esc(s.nro_factura || '—') + '</strong>' + (s.adjunto_path ? ' <button class="iconbtn" title="Ver factura" data-pdf="' + s.id + '">' + ICO.pdf + '</button>' : '') },
     { id:'prov', t:'Proveedor', v:s => s.proveedor_cod || '(sin proveedor)', td:s => esc(s.proveedor_cod || '') + ' ' + esc(s.proveedor || provNombre(s.proveedor_cod)) },
-    { id:'oc', t:'OC', v:s => nroOC(s.oc_numero) || '(sin OC)', td:s => esc(nroOC(s.oc_numero) || '—') },
+    { id:'oc', t:'OC', v:s => s.tipo === 'transferencia_uy' ? 'Transferencia UY (OG)' : (nroOC(s.oc_numero) || '(sin OC)'),
+      td:s => s.tipo === 'transferencia_uy' ? 'OG ' + esc(s.og_numero || s.og_id || '—') + '<div><span class="badge b-azul" style="white-space:nowrap">Transferencia Santander UY</span></div>' : esc(nroOC(s.oc_numero) || '—') },
     { id:'aux', t:'Auxiliar', v:s => s.proyecto_cod || '(sin auxiliar)', td:s => esc(s.proyecto_cod || '—') },
     { id:'comp', t:'Comprador', v:s => s.comprador || '(sin comprador)', td:s => esc(s.comprador || '') },
     { id:'mon', t:'Monto', v:s => s.moneda === 'USD' ? 'Dólares' : 'Pesos', s:s => +s.monto || 0, cls:'num', td:s => fmtMonto(s.monto, s.moneda) },
@@ -2174,6 +2199,10 @@ function spDetalle(id){
     + '<b>Factura:</b> ' + esc(s.nro_factura || '—') + (s.adjunto_path ? ' · <a href="#" class="lnk" id="dt-pdf">ver PDF</a>' : '') + '<br>'
     + '<b>OC:</b> ' + esc(nroOC(s.oc_numero) || '—') + ' &nbsp; <b>Remito:</b> ' + esc(s.remito_numero || '—') + '<br>'
     + '<b>Auxiliar:</b> ' + esc(s.proyecto_cod || '—') + ' &nbsp; <b>Comprador:</b> ' + esc(s.comprador || '—') + '<br>'
+    + (s.tipo === 'transferencia_uy' ? '<b>Tipo:</b> <span class="badge b-azul">Transferencia Santander UY</span> · OG ' + esc(s.og_numero || s.og_id || '—')
+        + (s.fac_fecha ? ' · factura del ' + fmtFecha(s.fac_fecha) : '') + (s.iva != null ? ' · IVA ' + fmtMonto(s.iva, s.moneda) : '')
+        + (s.fecha_requerida ? ' · <b>requerida para el ' + fmtFecha(s.fecha_requerida) + '</b>' : '') + '<br>'
+        + '<b>Contabilidad UY:</b> ' + (s.cuy_comprobante_id ? 'factura registrada (' + esc(s.cuy_comprobante_id) + ') · <a href="#" class="lnk" id="dt-cuy">ver en Contabilidad UY</a>' : '<span class="muted">se registra sola al abrir esta pantalla alguien que edita Contabilidad UY</span>') + '<br>' : '')
     + '<b>Monto:</b> ' + fmtMonto(s.monto, s.moneda) + '<br>'
     + '<b>Estado:</b> ' + badge(est)
     + (s.leido_en ? '<br><b>Leída:</b> ' + esc(s.leido_por || '') + ' · ' + fmtFecha(String(s.leido_en).slice(0,10)) : '')
@@ -2187,6 +2216,7 @@ function spDetalle(id){
     '<button class="btn ghost" id="dt-cerrar">Cerrar</button>', 'wide');
   document.getElementById('dt-cerrar').addEventListener('click', cerrarModal);
   const pdf = document.getElementById('dt-pdf'); if (pdf) pdf.addEventListener('click', e => { e.preventDefault(); spVerPdf(s.id); });
+  const lcuy = document.getElementById('dt-cuy'); if (lcuy) lcuy.addEventListener('click', e => { e.preventDefault(); cerrarModal(); CUY.tab = 'comp'; SP.q.cuy = s.nro_factura || ''; irVista('cuy'); });
   const bl = document.getElementById('ac-leido'); if (bl) bl.addEventListener('click', () => spAccion(s.id, 'leido'));
   const bpg = document.getElementById('ac-pag-ok'); if (bpg) bpg.addEventListener('click', () => {
     const f = document.getElementById('ac-pag-f').value;
@@ -3100,6 +3130,7 @@ function cuyGuia(){
       + '<li>' + ir('res', 'Resultados') + ': controlar el estado de resultados.</li></ol>')
     + guiaSec('Comprobantes', '<ul>'
       + '<li>Arriba: Total en pesos, IVA compras, Subtotal USD y «Para revisar».</li>'
+      + '<li>Las facturas de las <b>transferencias por Santander UY</b> que pide Compras se cargan solas (concepto «OG … · transferencia pedida por Compras»); solo hay que completar TC y cuenta. Ver Compras ↔ Finanzas → Instructivo.</li>'
       + '<li>«Nuevo comprobante» para cargar; el TC y la cuenta se editan directo en la tabla. «Completar N cuentas sugeridas» completa las que la app puede deducir.</li>'
       + '<li>IVA 22% por defecto; Neto = Total − IVA. Las N/C van en negativo y toman la fecha y el TC de la factura que anulan.</li>'
       + '<li>Si falta el TC de una factura en US$, la fila queda amarilla, no suma y el total dice «Total parcial».</li>'
